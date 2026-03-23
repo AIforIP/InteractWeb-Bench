@@ -1,0 +1,12 @@
+/*
+!.gitignore
+!.env.example
+!src/
+.env
+
+# 之前 src 里的排除规则
+src/data_generation/
+src/experiment_results/
+src/standalone_visual_logs/
+src/node_modules/
+src/__pycache__/
