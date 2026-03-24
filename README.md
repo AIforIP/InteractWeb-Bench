@@ -20,9 +20,9 @@ playwright install chromium
 本项目使用 `.env` 文件来管理 API 密钥。请参考根目录下的 `.env.example` 文件进行配置。
 
 1. **创建配置文件**：
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+cp .env.example .env
+```
 
 2. **编辑 `.env` 文件**，填入你的 API 信息：
 
@@ -44,19 +44,61 @@ ANTHROPIC_VLM_API_KEY="your_key"
 ANTHROPIC_VLM_BASE_URL="api_url"
 ```
 
-### 3. 在 src/experiment/run_simulation.py 文件中，修改参数：
-```python
-DEFAULT_DATA_PATH = r"生成网页指令的jsonl地址"
-parser.add_argument("--builder_model", type=str, default="你的测试模型")
-parser.add_argument("--visual_copilot_model", type=str, default="你的测试模型")
-parser.add_argument("--webvoyager_model", type=str, default="打分模型")
-parser.add_argument("--user_model", type=str, default="模拟用户的模型")
-```
+### 3. 修改配置文件 (config.yaml)：
+在项目根目录下编辑 config.yaml 文件，指定数据路径与模型参数：
+```YALM
+# 数据路径配置
+data_path: "数据jsonl路径"
 
-### 4. 启动模拟测试
+# 模型选择配置
+models:
+  builder_model: "测试模型"
+  visual_copilot_model: "测试模型"
+  webvoyager_model: "打分模型"
+  user_model: "用户模型"
+```
+### 4. 本地模型部署 (可选)：
+如果使用本地模型进行评测，需提前安装 vllm 包：
+```bash
+pip install vllm
+```
+目前底层代码已自动适配 qwen（端口 8024）和 llama（端口 8025）。请在项目中编写对应的 .sh 启动脚本。以 Qwen 为例（例如保存为 src/scripts/deploy_qwen_3b_thinking.sh）：
+```bash
+#!/bin/bash
+# 自动清理 8024 端口，防止启动冲突
+fuser -k 8024/tcp >/dev/null 2>&1
+
+MODEL_PATH="/home/hhr/home/hhr/models/Qwen3-VL-2B-Thinking"
+
+# 使用 Python 模块的绝对路径启动
+python -m vllm.entrypoints.openai.api_server \
+    --model $MODEL_PATH \
+    --served-model-name "Qwen/Qwen3-VL-2B-Thinking" \
+    --port 8024 \
+    --host 0.0.0.0 \
+    --trust-remote-code \
+    --dtype bfloat16 \
+    --max-model-len 16384 \
+    --limit-mm-per-prompt '{"image": 5}' \
+    --gpu-memory-utilization 0.7 \
+    --enforce-eager
+```
+### 5. 启动模拟测试
+确保当前处于项目根目录下（即 src 的上一级文件夹）。
+
+方式一：纯云端模型调用，直接运行主程序：
 ```bash
 # 确保你当前处于项目根目录下
 python src/experiment/run_simulation.py
 # 后台运行方式
 nohup python src/experiment/run_simulation.py > run_simulation.log 2>&1 &
+```
+方式二：使用本地模型 (双终端模式)，需要打开两个终端窗口，均激活环境并进入项目根目录：
+终端 1（启动本地大模型服务）：
+```bash
+bash src/scripts/deploy_qwen_3b_thinking.sh
+```
+终端 2（启动主测试程序）：
+```bash
+python src/experiment/run_simulation.py
 ```
