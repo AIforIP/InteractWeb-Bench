@@ -207,30 +207,38 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
 #  任务运行引擎
 # ==============================================================================
 def run_single_task(task, args):
-    task_id = task.get("id", "unknown")
-    difficulty = task.get("difficulty", "middle")
-    persona = task.get("persona", "P-MIN")
-    ground_truth = task.get("ground_truth_instruction", task.get("instruction"))
-    user_instruction = task.get("instruction")  # 获取用户指令
+    # 1. 提取 task_id 并统一转为字符串，防止路径拼接报错
+    task_id = str(task.get("id", "unknown"))
 
-    # 直接从当前任务行解析出打分标准
-    current_oracle_slots = task.get("oracle_slots", [])
-
-    max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 20)
-    error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 5)
-
-    print(f"\n==== Task {task_id} [{difficulty.upper()}] ====")
-
-    # =========================================================
-    # 【核心修改点】：按照 builder_model 分隔输出目录
-    # 1. 净化模型名称，防止 "author/model_name" 中的斜杠破坏目录结构
+    # 2. 提前计算路径
     safe_model_name = args.builder_model.replace("/", "-").replace(":", "-")
-
-    # 2. 将 safe_model_name 插入到输出路径中
-    # 最终结构例如: experiment_results/gpt-5-mini/workspaces/000001
     workspace_dir = os.path.join(args.output_dir, safe_model_name, "workspaces", task_id)
     log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
-    # =========================================================
+    history_file = os.path.join(log_dir, "interaction_history.json")
+
+    # 3. 断点续传检查：如果没开启覆盖模式，且最终的历史记录文件已存在，跳过当前任务
+    if not args.overwrite and os.path.exists(history_file):
+        print(f"\n==== Task {task_id} ==== [已完成，触发断点续传，跳过当前任务]")
+        return
+
+    # 4. 脏数据清理：如果发现残留的中断数据（有文件夹但无最终 json），进行清理
+    if not args.overwrite and (os.path.exists(workspace_dir) or os.path.exists(log_dir)):
+        print(f"\n==== Task {task_id} ==== [发现残留的中断数据，正在清理并重新开始]")
+        import shutil
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+        shutil.rmtree(log_dir, ignore_errors=True)
+
+    # 1. 把提取难度的默认值改为字典中不存在的 "test"
+    difficulty = task.get("difficulty", "test")
+    persona = task.get("persona", "P-MIN")
+    ground_truth = task.get("ground_truth_instruction", task.get("instruction"))
+    user_instruction = task.get("instruction")
+    current_oracle_slots = task.get("oracle_slots", [])
+
+    # 2. 此时字典找不到 "test"，就会生效后备值 3 和 2
+    max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 3)
+    error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 2)
+    print(f"\n==== Task {task_id} [{difficulty.upper()}] 开始运行 ====")
 
     # 初始化 WebGenAgent 时，传入修改后的目录
     builder = WebGenAgent(
@@ -246,7 +254,6 @@ def run_single_task(task, args):
         difficulty=difficulty,
         max_simulation_steps=MAX_SIMULATION_STEPS
     )
-
     # UserSimulator 通常用于模拟用户行为，继续使用原本的参数即可
     user_sim = UserSimulator(
         ground_truth_instruction=task.get("ground_truth_instruction", user_instruction),
@@ -267,7 +274,7 @@ def run_single_task(task, args):
         action, is_failed = builder.step(loop_idx, simulation_mode=True)
         builder.save_history(loop_idx)
         loop_idx += 1
-
+        
         raw_output = builder.messages[-1]["content"] if builder.messages else ""
 
         if action["type"] == "question":
