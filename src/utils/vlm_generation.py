@@ -51,6 +51,36 @@ if anthropic_api_key:
     )
 
 
+# ── 【新增】动态本地模型路由 ──────────────────────────────────────────────────
+def get_local_client(model_name: str):
+    """
+    根据模型名称判断是否为本地部署的模型，并分配对应的端口。
+    如果你未来部署了多个本地模型，可以在这里直接添加端口映射。
+    """
+    model_lower = model_name.lower()
+    port = None
+
+    # 将 Qwen 指向 8024 端口
+    if "qwen" in model_lower:
+        port = 8024
+    # 为未来可能部署的 Llama 预留 8025 端口
+    elif "llama" in model_lower:
+        port = 8025
+
+    if port:
+        return OpenAI(
+            api_key="EMPTY",  # 本地 vLLM 服务通常不需要真实的 API Key
+            base_url=f"http://localhost:{port}/v1",
+            http_client=httpx.Client(
+                base_url=f"http://localhost:{port}/v1",
+                follow_redirects=True,
+                timeout=robust_timeout,
+                transport=robust_transport
+            )
+        )
+    return None
+
+
 # ── Helper: 图片编码 ──────────────────────────────────────────────────────────
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
@@ -148,11 +178,24 @@ def vlm_generation(messages: list[dict], model: str, **kwargs) -> str:
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = 1000
 
-            chat_response = openai_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                **kwargs,
-            )
+            # 检查是否为配置在本地白名单中的模型
+            local_client = get_local_client(model)
+
+            if local_client:
+                # 走本地 vLLM 服务
+                chat_response = local_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    **kwargs,
+                )
+            else:
+                # 走云端 API
+                chat_response = openai_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    **kwargs,
+                )
+
             return chat_response.choices[0].message.content
 
         # ── 错误捕获与重试逻辑 ──

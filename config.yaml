@@ -3,7 +3,7 @@ data_path: "/home/hhr/home/hhr/src/data/test_mini.jsonl"
 
 # 模型选择配置
 models:
-  builder_model: "gpt-5-mini"
-  visual_copilot_model: "gpt-5-mini"
+  builder_model: "Qwen/Qwen3-VL-2B-Thinking"
+  visual_copilot_model: "Qwen/Qwen3-VL-2B-Thinking"
   webvoyager_model: "gpt-5-mini"
   user_model: "deepseek-v3.2"

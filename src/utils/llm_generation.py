@@ -17,11 +17,14 @@ if not api_key:
     raise ValueError("API Key not found! Please set OPENAILIKE_API_KEY or OPENAI_API_KEY in .env")
 
 # 使用 httpx 自定义客户端，增加超时时间和底层重试
+robust_timeout = 300
+robust_transport = httpx.HTTPTransport(retries=3)
+
 http_client = httpx.Client(
     base_url=base_url,
     follow_redirects=True,
-    timeout=300,  # 增加超时时间到 300 秒，防止大模型生成长代码时断开
-    transport=httpx.HTTPTransport(retries=3)  # 在 TCP/SSL 协议层自动重试 3 次
+    timeout=robust_timeout,  # 增加超时时间到 300 秒，防止大模型生成长代码时断开
+    transport=robust_transport  # 在 TCP/SSL 协议层自动重试 3 次
 )
 
 client = OpenAI(
@@ -29,6 +32,35 @@ client = OpenAI(
     base_url=base_url,
     http_client=http_client
 )
+
+
+# ── 【新增】动态本地模型路由 ──────────────────────────────────────────────────
+def get_local_client(model_name: str):
+    """
+    根据模型名称判断是否为本地部署的模型，并分配对应的端口。
+    """
+    model_lower = model_name.lower()
+    port = None
+
+    # 默认 Qwen 走 8024 端口
+    if "qwen" in model_lower:
+        port = 8024
+    # 预留 Llama 走 8001 端口
+    elif "llama" in model_lower:
+        port = 8025
+
+    if port:
+        return OpenAI(
+            api_key="EMPTY",  # 本地服务不需要真实的 API Key
+            base_url=f"http://localhost:{port}/v1",
+            http_client=httpx.Client(
+                base_url=f"http://localhost:{port}/v1",
+                follow_redirects=True,
+                timeout=robust_timeout,
+                transport=robust_transport
+            )
+        )
+    return None
 
 
 def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, temperature=0.5):
@@ -58,9 +90,16 @@ def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, tem
                 params["max_tokens"] = max_tokens
 
             # -----------------------------------------------------------------
-            # 3. 发起调用
+            # 3. 发起调用 (动态路由)
             # -----------------------------------------------------------------
-            chat_response = client.chat.completions.create(**params)
+            local_client = get_local_client(model)
+
+            if local_client:
+                # 命中本地白名单，调用本地 vLLM 接口
+                chat_response = local_client.chat.completions.create(**params)
+            else:
+                # 走正常的云端 API
+                chat_response = client.chat.completions.create(**params)
 
             return chat_response.choices[0].message.content
 
