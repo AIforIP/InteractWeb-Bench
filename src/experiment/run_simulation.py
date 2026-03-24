@@ -5,7 +5,7 @@ import sys
 import subprocess
 import time
 import shutil
-
+import yaml
 # 将 src 加入路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -340,20 +340,55 @@ def run_single_task(task, args):
         total_violating_chitchat
     )
 
+
 def main():
+    # ==========================================
+    # 1. 读取 YAML 配置文件
+    # ==========================================
+    # 动态定位到项目根目录下的 config.yaml
+    current_file_path = os.path.abspath(__file__)
+    # src/experiment/run_simulation.py -> 向上退三级到项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
+    config_path = os.path.join(project_root, "config.yaml")
+
+    config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            print(f"[系统] 成功加载配置文件: {config_path}")
+        except Exception as e:
+            print(f"\033[91m[错误] 读取 config.yaml 失败: {e}\033[0m")
+    else:
+        print(f"\033[93m[警告] 未找到 {config_path}，将使用系统默认硬编码值。\033[0m")
+
+    # ==========================================
+    # 2. 提取配置项 (带有后备默认值)
+    # ==========================================
+    yaml_data_path = config.get("data_path", DEFAULT_DATA_PATH)
+    models_cfg = config.get("models", {})
+
+    # ==========================================
+    # 3. 设置命令行参数解析
+    # ==========================================
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH)
+    # 使用 yaml_data_path 作为 data_path 的默认值
+    parser.add_argument("--data_path", type=str, default=yaml_data_path)
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--builder_model", type=str, default="gpt-5-mini")
-    parser.add_argument("--visual_copilot_model", type=str, default="gpt-5-mini")
-    parser.add_argument("--webvoyager_model", type=str, default="gpt-5-mini")
-    parser.add_argument("--user_model", type=str, default="deepseek-v3.2")
+
+    # 优先使用 yaml 中的模型配置，如果 yaml 没写，则回退到原来的默认值
+    parser.add_argument("--builder_model", type=str, default=models_cfg.get("builder_model", "gpt-5-mini"))
+    parser.add_argument("--visual_copilot_model", type=str,
+                        default=models_cfg.get("visual_copilot_model", "gpt-5-mini"))
+    parser.add_argument("--webvoyager_model", type=str, default=models_cfg.get("webvoyager_model", "gpt-5-mini"))
+    parser.add_argument("--user_model", type=str, default=models_cfg.get("user_model", "deepseek-v3.2"))
     parser.add_argument("--overwrite", action="store_true")
+
     args = parser.parse_args()
 
     # 检查输入文件是否存在
     if not os.path.exists(args.data_path):
-        print(f"Error: Data file not found at {args.data_path}")
+        print(f"\033[91m[错误] 数据文件不存在: {args.data_path}\033[0m")
         return
 
     with open(args.data_path, "r", encoding="utf-8") as f:
