@@ -1,0 +1,9 @@
+# 数据路径配置
+data_path: "生成网页指令的jsonl地址"
+
+# 模型选择配置
+models:
+  builder_model: "你的测试模型"
+  visual_copilot_model: "你的测试模型"
+  webvoyager_model: "打分模型"
+  user_model: "模拟用户的模型"
