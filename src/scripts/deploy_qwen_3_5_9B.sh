@@ -8,7 +8,7 @@ MODEL_PATH="/data/shared/users/wangqiyao/models/Qwen3.5-9B"
 CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
     --model $MODEL_PATH \
     --served-model-name "Qwen3.5-9B" \
-    --port 8000 \
+    --port 8024 \
     --host 0.0.0.0 \
     --trust-remote-code \
     --max-model-len 16384 \
