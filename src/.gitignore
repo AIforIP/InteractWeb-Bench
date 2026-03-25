@@ -1,6 +1,0 @@
-data_generation/
-experiment_results/
-standalone_visual_logs/
-node_modules/
-__pycache__/
-.env
