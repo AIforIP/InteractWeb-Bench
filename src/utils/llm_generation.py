@@ -34,32 +34,41 @@ client = OpenAI(
 )
 
 
-# ── 【新增】动态本地模型路由 ──────────────────────────────────────────────────
 def get_local_client(model_name: str):
     """
-    根据模型名称判断是否为本地部署的模型，并分配对应的端口。
+    根据 .env 中的 LOCAL_MODELS_MAP 配置，动态判断当前模型是否为本地部署。
+    支持本地模型与 API 模型的完美混用。
     """
+    # 1. 从环境变量获取映射字符串
+    # 例: "Qwen3.5-9B=http://localhost:8024/v1,llama3=http://localhost:8025/v1"
+    mapping_str = os.environ.get("LOCAL_MODELS_MAP", "")
+    if not mapping_str.strip():
+        return None
+
+    # 2. 解析为字典 (将模型名转为小写以实现忽略大小写的匹配)
+    local_route_dict = {}
+    for item in mapping_str.split(","):
+        if "=" in item:
+            m_name, m_url = item.split("=", 1)
+            local_route_dict[m_name.strip().lower()] = m_url.strip()
+
+    # 3. 检查当前模型是否在本地白名单中
     model_lower = model_name.lower()
-    port = None
-
-    # 默认 Qwen 走 8024 端口
-    if "qwen" in model_lower:
-        port = 8024
-    # 预留 Llama 走 8001 端口
-    elif "llama" in model_lower:
-        port = 8025
-
-    if port:
+    if model_lower in local_route_dict:
+        local_base_url = local_route_dict[model_lower]
+        # 如果命中，返回一个指向本地端口的独立 Client
         return OpenAI(
-            api_key="EMPTY",  # 本地服务不需要真实的 API Key
-            base_url=f"http://localhost:{port}/v1",
+            api_key="EMPTY",  # 本地 vLLM 不需要真实 Key
+            base_url=local_base_url,
             http_client=httpx.Client(
-                base_url=f"http://localhost:{port}/v1",
+                base_url=local_base_url,
                 follow_redirects=True,
-                timeout=robust_timeout,
-                transport=robust_transport
+                timeout=robust_timeout,  # 使用文件顶部定义好的健壮 timeout
+                transport=robust_transport  # 使用文件顶部定义好的健壮 transport
             )
         )
+
+    # 4. 如果不在列表中，返回 None，外层代码会自动使用配置了云端 API_KEY 的主 Client
     return None
 
 

@@ -15,6 +15,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from .webvoyager_prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_TEXT_ONLY
@@ -31,29 +32,21 @@ from .webvoyager_utils import (
 )
 from datetime import datetime
 
-
 import sys
 import base64
 import binascii
 
-from anthropic import Anthropic                 # Claude / Anthropic endpoint
+from anthropic import Anthropic  # Claude / Anthropic endpoint
 
 from types import SimpleNamespace
 from typing import Tuple, Optional
+
 
 # -----------------------------------------
 # Helper: convert Claude response ➜ OpenAI-like
 # -----------------------------------------
 def _anthropic_to_openai(claude_resp) -> SimpleNamespace:
-    """
-    Wrap an Anthropic Claude chat completion response so that it exposes:
-      • usage.prompt_tokens
-      • usage.completion_tokens
-      • choices[0].message.content
-    Exactly like an OpenAI python-sdk ChatCompletion object.
-    """
-    # 1️⃣  Usage block
-    prompt_tokens     = claude_resp.usage.input_tokens
+    prompt_tokens = claude_resp.usage.input_tokens
     completion_tokens = claude_resp.usage.output_tokens
     usage = SimpleNamespace(
         prompt_tokens=prompt_tokens,
@@ -61,90 +54,71 @@ def _anthropic_to_openai(claude_resp) -> SimpleNamespace:
         total_tokens=prompt_tokens + completion_tokens,
     )
 
-    # 2️⃣  Message & choice
-    # Claude v2/v3 returns `content` as a list of content blocks;
-    # if it’s already a plain string just use it directly.
     if isinstance(claude_resp.content, list):
-        # Concatenate *only* the text blocks
         text_blocks = [c.text for c in claude_resp.content if hasattr(c, "text")]
         content = "".join(text_blocks)
     else:
         content = claude_resp.content
 
     message = SimpleNamespace(role="assistant", content=content)
-    choice  = SimpleNamespace(index=0,
-                              finish_reason=getattr(claude_resp, "stop_reason", None),
-                              message=message)
+    choice = SimpleNamespace(index=0,
+                             finish_reason=getattr(claude_resp, "stop_reason", None),
+                             message=message)
 
-    # 3️⃣  Final OpenAI-shaped response
     openai_like = SimpleNamespace(
-        id      = claude_resp.id,
-        object  = "chat.completion",
-        created = int(time.time()),
-        model   = claude_resp.model,
-        usage   = usage,
-        choices = [choice],
+        id=claude_resp.id,
+        object="chat.completion",
+        created=int(time.time()),
+        model=claude_resp.model,
+        usage=usage,
+        choices=[choice],
     )
-
     return openai_like
 
 
 # ── Helper: light-weight MIME sniffing ─────────────────────────────────────────
 def _detect_media_type(b64: str, fallback: str = "image/jpeg") -> str:
-    """
-    Inspect the first bytes of a Base-64 image and deduce its MIME type.
-    Defaults to `fallback` if unknown.
-    """
     try:
-        hdr = base64.b64decode(b64[:64], validate=False)  # only a few bytes
+        hdr = base64.b64decode(b64[:64], validate=False)
     except binascii.Error:
         return fallback
 
-    if hdr.startswith(b"\xFF\xD8\xFF"):               # JPEG SOI
+    if hdr.startswith(b"\xFF\xD8\xFF"):
         return "image/jpeg"
-    if hdr.startswith(b"\x89PNG\r\n\x1A\n"):          # PNG signature
+    if hdr.startswith(b"\x89PNG\r\n\x1A\n"):
         return "image/png"
     if hdr.startswith(b"GIF87a") or hdr.startswith(b"GIF89a"):
         return "image/gif"
-    if hdr[0:4] == b"RIFF" and hdr[8:12] == b"WEBP":  # WebP
+    if hdr[0:4] == b"RIFF" and hdr[8:12] == b"WEBP":
         return "image/webp"
     return fallback
 
+
 # ── Helper: OpenAI → Anthropic message conversion ─────────────────────────────
 def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]:
-    """
-    Transform OpenAI-style messages (including image_url blocks)
-    into Anthropic v1 format.
-    """
     converted: list[dict] = []
     system_text: str | None = None
 
     for msg in messages:
         role = msg["role"]
-
-        # System prompt is passed separately.
         if role == "system":
             system_text = msg["content"]
             continue
 
         new_msg: dict = {"role": role, "content": []}
 
-        # 1️⃣ Pure-text message
         if isinstance(msg["content"], str):
             new_msg["content"].append({"type": "text", "text": msg["content"]})
             converted.append(new_msg)
             continue
 
-        # 2️⃣ Mixed content list (text + images)
         for block in msg["content"]:
             if block["type"] == "text":
                 new_msg["content"].append({"type": "text", "text": block["text"]})
 
             elif block["type"] == "image_url":
-                url = block["image_url"]["url"]        # data:image/xyz;base64,…
+                url = block["image_url"]["url"]
                 media_prefix, b64_data = url.split(";base64,", maxsplit=1)
-
-                # Prefer real signature over the prefix (fixes 400 error)
                 media_type = _detect_media_type(b64_data, fallback=media_prefix.replace("data:", ""))
 
                 new_msg["content"].append(
@@ -157,17 +131,15 @@ def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]
                         },
                     }
                 )
-
         converted.append(new_msg)
 
     return system_text, converted
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Logging helpers
 # ────────────────────────────────────────────────────────────────────────────────
-
 def setup_logger(folder_path: str):
-    """Initialise a fresh logger that writes to *folder_path*/agent.log."""
     os.makedirs(folder_path, exist_ok=True)
     log_file_path = os.path.join(folder_path, "agent.log")
 
@@ -188,26 +160,14 @@ def setup_logger(folder_path: str):
 # ────────────────────────────────────────────────────────────────────────────────
 # Selenium / browser configuration
 # ────────────────────────────────────────────────────────────────────────────────
-
 def driver_config(args: argparse.Namespace) -> tuple[webdriver.ChromeOptions, str]:
-    """
-    Build ChromeOptions and create a unique temporary profile directory.
-    Returns (options, profile_path).
-    """
     options = webdriver.ChromeOptions()
-
-    # ---  NEW: one‑off temp profile  ---
     tmp_profile = tempfile.mkdtemp()
     options.add_argument(f"--user-data-dir={tmp_profile}")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     print(f"Temp Chrome profile: {tmp_profile}")
-    # -----------------------------------
 
-    # if args.save_accessibility_tree:
-    #     args.force_device_scale = True
-    # if args.force_device_scale:
-    #     options.add_argument("--force-device-scale-factor=1")
     if args.headless:
         options.add_argument("--headless=new")
         options.add_argument(
@@ -216,7 +176,7 @@ def driver_config(args: argparse.Namespace) -> tuple[webdriver.ChromeOptions, st
             "Chrome/119.0.0.0 Safari/537.36"
         )
 
-    # options.unhandled_prompt_behavior = 'accept'
+    options.unhandled_prompt_behavior = 'accept'
 
     options.add_experimental_option(
         "prefs",
@@ -229,15 +189,14 @@ def driver_config(args: argparse.Namespace) -> tuple[webdriver.ChromeOptions, st
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Prompt‑formatting helpers (copied verbatim from original script)
+# Prompt‑formatting helpers
 # ────────────────────────────────────────────────────────────────────────────────
-
 def format_msg(it, init_msg, pdf_obs, warn_obs, web_img_b64, web_text):
     if it == 1:
         init_msg += (
-            "I've provided the tag name of each element and the text it contains (if text exists). "
-            "Note that <textarea> or <input> may be textbox, but not exactly. "
-            "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
+                "I've provided the tag name of each element and the text it contains (if text exists). "
+                "Note that <textarea> or <input> may be textbox, but not exactly. "
+                "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
         )
         init_msg_format = {
             "role": "user",
@@ -260,10 +219,10 @@ def format_msg(it, init_msg, pdf_obs, warn_obs, web_img_b64, web_text):
                     {
                         "type": "text",
                         "text": (
-                            f"Observation:{warn_obs} please analyze the attached screenshot and give the Thought and Action. "
-                            "I've provided the tag name of each element and the text it contains (if text exists). "
-                            "Note that <textarea> or <input> may be textbox, but not exactly. "
-                            "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
+                                f"Observation:{warn_obs} please analyze the attached screenshot and give the Thought and Action. "
+                                "I've provided the tag name of each element and the text it contains (if text exists). "
+                                "Note that <textarea> or <input> may be textbox, but not exactly. "
+                                "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
                         ),
                     },
                     {
@@ -279,11 +238,11 @@ def format_msg(it, init_msg, pdf_obs, warn_obs, web_img_b64, web_text):
                     {
                         "type": "text",
                         "text": (
-                            f"Observation: {pdf_obs} Please analyze the response given by Assistant, then consider whether to continue iterating or not. "
-                            "The screenshot of the current page is also attached, give the Thought and Action. "
-                            "I've provided the tag name of each element and the text it contains (if text exists). "
-                            "Note that <textarea> or <input> may be textbox, but not exactly. "
-                            "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
+                                f"Observation: {pdf_obs} Please analyze the response given by Assistant, then consider whether to continue iterating or not. "
+                                "The screenshot of the current page is also attached, give the Thought and Action. "
+                                "I've provided the tag name of each element and the text it contains (if text exists). "
+                                "Note that <textarea> or <input> may be textbox, but not exactly. "
+                                "Please focus more on the screenshot and then refer to the textual information.\n" + web_text
                         ),
                     },
                     {
@@ -307,15 +266,15 @@ def format_msg_text_only(it, init_msg, pdf_obs, warn_obs, ac_tree):
             curr_msg = {
                 "role": "user",
                 "content": (
-                    f"Observation:{warn_obs} please analyze the accessibility tree and give the Thought and Action.\n" + ac_tree
+                        f"Observation:{warn_obs} please analyze the accessibility tree and give the Thought and Action.\n" + ac_tree
                 ),
             }
         else:
             curr_msg = {
                 "role": "user",
                 "content": (
-                    f"Observation: {pdf_obs} Please analyze the response given by Assistant, then consider whether to continue iterating or not. "
-                    "The accessibility tree of the current page is also given, give the Thought and Action.\n" + ac_tree
+                        f"Observation: {pdf_obs} Please analyze the response given by Assistant, then consider whether to continue iterating or not. "
+                        "The accessibility tree of the current page is also given, give the Thought and Action.\n" + ac_tree
                 ),
             }
         return curr_msg
@@ -353,27 +312,33 @@ def call_gpt4v_api(args, openai_client, anthropic_client, messages):
             logging.info("Prompt Tokens: %s; Completion Tokens: %s", prompt_tokens, completion_tokens)
             return prompt_tokens, completion_tokens, False, openai_response
 
-        except Exception as e:  # pylint: disable=broad-except
-            logging.warning("Error %s, retrying…", type(e).__name__)
-            if type(e).__name__ == "RateLimitError":
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logging.warning("Error %s: %s, retrying…", error_type, error_msg)
+
+            # 【修复】增强 API 调用鲁棒性
+            if "RateLimit" in error_type or "429" in error_msg:
                 time.sleep(10)
-            elif type(e).__name__ == "APIError":
+            elif "APIError" in error_type:
                 time.sleep(15)
-            elif type(e).__name__ == "InvalidRequestError":
+            elif any(k in error_type for k in ["Timeout", "Connection"]) or any(k in error_msg for k in ["502", "503"]):
+                time.sleep(10)
+            elif "InvalidRequest" in error_type or "400" in error_msg:
+                logging.error("Fatal API Error (e.g. 400 Bad Request). Cannot recover.")
                 return None, None, True, None
             else:
-                return None, None, True, None
+                time.sleep(5)
 
         retry_times += 1
         if retry_times >= 10:
-            logging.error("Retry limit reached while calling OpenAI API")
+            logging.error("Retry limit reached while calling API")
             return None, None, True, None
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Web‑interaction helpers (copied verbatim from original script)
+# Web‑interaction helpers
 # ────────────────────────────────────────────────────────────────────────────────
-
 def exec_action_click(info, web_ele, driver_task):
     driver_task.execute_script("arguments[0].setAttribute('target', '_self')", web_ele)
     web_ele.click()
@@ -387,8 +352,8 @@ def exec_action_type(info, web_ele, driver_task):
     ele_tag_name = web_ele.tag_name.lower()
     ele_type = web_ele.get_attribute("type")
     if (
-        (ele_tag_name != "input" and ele_tag_name != "textarea")
-        or (ele_tag_name == "input" and ele_type not in ["text", "search", "password", "email", "tel"])
+            (ele_tag_name != "input" and ele_tag_name != "textarea")
+            or (ele_tag_name == "input" and ele_type not in ["text", "search", "password", "email", "tel"])
     ):
         warn_obs = (
             f"note: The web element you're trying to type may not be a textbox, and its tag name is <{web_ele.tag_name}>, type is {ele_type}."
@@ -451,44 +416,58 @@ def exec_action_scroll(info, web_eles, driver_task, args, obs_info):
     time.sleep(3)
 
 
-
-# Prompt shown when max iterations reached
+# 【修复】统一 Max Turns 提示词格式，使其适配外层正则提取器
 ui_limit_prompt_template = (
     "You have reached the maximum number of allowed interactions with the website.\n\n"
     "Please evaluate the outcome of your attempts based on the Testing Checklist provided at the beginning of our conversation.\n"
     "Now, please stop exploring and output your final report using the 'ANSWER' action.\n"
-    "You MUST strictly follow the XML `<assessment>` format for every ID requested earlier. Do NOT answer with just YES or NO, and keep your reasons concise.\n"
+    "You MUST strictly follow the format: [FAILED ID: X] Reason: ... or [PASSED ID: X] Reason: ... for every ID requested earlier. Do NOT use XML. Keep your reasons concise.\n"
     "Example format:\n"
-    "Thought: Evaluation complete.\n"
+    "Thought: Evaluation complete. I will now report the results.\n"
     "Action: ANSWER;\n"
-    "<assessment id=\"0\" passed=\"true\">Reason</assessment>\n"
-    "<assessment id=\"1\" passed=\"false\">Reason</assessment>"
+    "[FAILED ID: 0] Reason: The feature could not be tested because clicking the button had no response.\n"
+    "[PASSED ID: 1] Reason: The navigation link was visible and correct."
 )
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Core per‑task execution logic (adapted from original main loop)
+# Core per‑task execution logic
 # ────────────────────────────────────────────────────────────────────────────────
-
 def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
-    """Run one task in an isolated process."""
-
     args = argparse.Namespace(**args_dict)
     task_dir = os.path.join(args.output_dir, f"task{task['id']}")
     if os.path.isfile(os.path.join(task_dir, "interact_messages.json")):
-        # Skip already completed task (idempotent)
         return
 
     setup_logger(task_dir)
     logging.info("########## TASK%s ##########", task["id"])
 
-    # Per‑process OpenAI client
-    client = OpenAI(api_key=os.environ["OPENAILIKE_VLM_API_KEY"], 
-                base_url=os.environ["OPENAILIKE_VLM_BASE_URL"])
+    # ── 【修复】动态模型路由：支持本地与云端混搭 ──
+    mapping_str = os.environ.get("LOCAL_MODELS_MAP", "")
+    local_route_dict = {}
+    for item in mapping_str.split(","):
+        if "=" in item:
+            m_name, m_url = item.split("=", 1)
+            local_route_dict[m_name.strip().lower()] = m_url.strip()
+
+    model_lower = args.api_model.lower()
+
+    if model_lower in local_route_dict:
+        logging.info(f"Routing WebVoyager Model '{args.api_model}' to Local: {local_route_dict[model_lower]}")
+        client = OpenAI(
+            api_key="EMPTY",
+            base_url=local_route_dict[model_lower]
+        )
+    else:
+        logging.info(f"Routing WebVoyager Model '{args.api_model}' to Cloud API.")
+        client = OpenAI(
+            api_key=os.environ.get("OPENAILIKE_VLM_API_KEY", ""),
+            base_url=os.environ.get("OPENAILIKE_VLM_BASE_URL", "")
+        )
 
     anthropic_client = Anthropic(
-        api_key=os.environ["ANTHROPIC_VLM_API_KEY"],
-        base_url=os.environ["ANTHROPIC_VLM_BASE_URL"],
+        api_key=os.environ.get("ANTHROPIC_VLM_API_KEY", ""),
+        base_url=os.environ.get("ANTHROPIC_VLM_BASE_URL", "https://api.anthropic.com/v1"),
     )
 
     options, tmp_profile = driver_config(args)
@@ -497,6 +476,28 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
 
     try:
         driver_task.get(task["web"])
+        # 【修复】拦截原生弹窗，但将其渲染为可见的 DOM 元素以保留视觉反馈
+        driver_task.execute_script("""
+            function renderSystemPopup(msg, type) {
+                var d = document.createElement('div');
+                d.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#f44336;color:white;padding:15px;z-index:2147483647;border-radius:5px;box-shadow:0 4px 6px rgba(0,0,0,0.3);font-family:sans-serif;font-size:16px;max-width:80%;word-wrap:break-word;';
+                d.innerHTML = '<b>System ' + type + ':</b><br>' + msg;
+                document.body.appendChild(d);
+                setTimeout(function(){ if(d.parentNode) d.remove(); }, 6000);
+            }
+            window.alert = function(msg) { 
+                renderSystemPopup(msg, 'Alert'); 
+                return true; 
+            };
+            window.confirm = function(msg) { 
+                renderSystemPopup(msg, 'Confirm'); 
+                return true; 
+            };
+            window.prompt = function(msg, defaultText) { 
+                renderSystemPopup(msg, 'Prompt'); 
+                return 'TestInput'; 
+            };
+        """)
     except Exception:
         logging.error("Error: Cannot access the website %s", task["web"])
         driver_task.quit()
@@ -514,7 +515,6 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
 
     os.makedirs(args.download_dir, exist_ok=True)
 
-    # Ensure download dir empty for this task
     for f in os.listdir(args.download_dir):
         fp = os.path.join(args.download_dir, f)
         if os.path.isfile(fp):
@@ -591,13 +591,11 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
         else:
             messages.append({"role": "user", "content": fail_obs})
 
-        # Clip messages to avoid too many images
         if not args.text_only:
             messages = clip_message_and_obs(messages, args.max_attached_imgs)
         else:
             messages = clip_message_and_obs_text_only(messages, args.max_attached_imgs)
 
-        # Call OpenAI
         prompt_tokens, completion_tokens, gpt_call_error, openai_response = call_gpt4v_api(
             args, client, anthropic_client, messages
         )
@@ -608,13 +606,11 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
         gpt_4v_res = openai_response.choices[0].message.content
         messages.append({"role": "assistant", "content": gpt_4v_res})
 
-        # Remove overlay rectangles
         if (not args.text_only) and "rects" in locals() and rects:
             for rect_ele in rects:
                 driver_task.execute_script("arguments[0].remove()", rect_ele)
             rects = []
 
-        # Extract action
         try:
             assert "Thought:" in gpt_4v_res and "Action:" in gpt_4v_res
         except AssertionError:
@@ -649,10 +645,9 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
                     )
                 exec_action_click(info, web_ele, driver_task)
 
-                # Check for PDF downloads
                 current_files = sorted(os.listdir(args.download_dir))
                 if current_files != download_files:
-                    time.sleep(10)  # wait for download
+                    time.sleep(10)
                     current_files = sorted(os.listdir(args.download_dir))
                     new_pdfs = [
                         pdf for pdf in current_files if pdf not in download_files and pdf.endswith(".pdf")
@@ -664,8 +659,8 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
                         )
                         shutil.copy(os.path.join(args.download_dir, pdf_file), task_dir)
                         pdf_obs = (
-                            "You downloaded a PDF file, I ask the Assistant API to answer the task based on the PDF file and get the following response: "
-                            + pdf_obs
+                                "You downloaded a PDF file, I ask the Assistant API to answer the task based on the PDF file and get the following response: "
+                                + pdf_obs
                         )
                     download_files[:] = current_files
 
@@ -708,12 +703,12 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
 
             elif action_key == "answer":
                 logging.info(info["content"])
-                break  # finished!
+                break
 
             else:
                 raise NotImplementedError(f"Unknown action {action_key}")
 
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:
             logging.error("Driver error info: %s", e)
             if "element click intercepted" not in str(e):
                 fail_obs = (
@@ -732,7 +727,6 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
 
 
 if __name__ == "__main__":
-    # Example usage
     example_task = {
         "id": 1,
         "web": "http://localhost:36419/",

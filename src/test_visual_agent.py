@@ -146,33 +146,40 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
 if __name__ == "__main__":
     # ================= 配置区域 =================
 
-    # 1. 网页项目源代码目录 (填入你生成的代码文件夹绝对路径)
-    # 只要填了这里，脚本就会自动进去执行 npm install / npm run dev
-    PROJECT_DIR = r"E:\Agent_work\src\experiment_results\workspaces\000002_P-RAM"
+    # 1. 网页项目源代码目录 (指向你刚刚生成的 000014_P-RAM 工作区)
+    PROJECT_DIR = "/home/hhr/home/hhr/experiment_results/gpt-5-mini/workspaces/000014_P-RAM"
 
-    # 2. 启动服务的命令 (如果是静态 HTML 请留空 None)
+    # 2. 启动服务的命令
     START_CMD = "npm run dev"
 
     # 3. 浏览器要访问的目标地址
     TARGET_WEB_URL = "http://localhost:3000"
 
-    # 4. 数据集路径与索引
-    JSONL_FILE_PATH = r"E:\Agent_work\src\data_generation\test_mini.jsonl"
+    # 4. 数据集路径与索引 (指向你实际的 jsonl 文件)
+    JSONL_FILE_PATH = "/home/hhr/home/hhr/src/data/test_mini.jsonl"
+
+    # 注意：你需要将这里的 Index 改为 000014_P-RAM 在 jsonl 文件中实际的行号（从0开始计）
+    # 如果只是为了测试视觉能力，你也可以直接将下面 instruction 写死成字符串
     TEST_DATA_INDEX = 0
+
+    # 5. 指定本地视觉模型名称 (必须包含 qwen 以触发你们的动态路由)
+    LOCAL_VLM_MODEL = "Qwen/Qwen3-VL-2B-Thinking"
 
     # ===========================================
 
     try:
+        # 如果 jsonl 提取报错，可以直接将 instruction = "用户具体的网页需求文本"
         task_id, instruction = extract_instruction_from_jsonl(JSONL_FILE_PATH, TEST_DATA_INDEX)
         print(f"=====================================")
-        print(f"📋 成功加载任务 ID: {task_id}")
+        print(f"成功加载任务 ID: {task_id}")
         print(f"=====================================")
 
         run_standalone_visual_test(
             target_url=TARGET_WEB_URL,
             ground_truth_instruction=instruction,
             project_dir=PROJECT_DIR,
-            start_cmd=START_CMD
+            start_cmd=START_CMD,
+            vlm_model=LOCAL_VLM_MODEL  # 强制传入本地模型名称
         )
     except Exception as err:
         print(f"初始化失败: {err}")
