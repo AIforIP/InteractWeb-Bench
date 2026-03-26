@@ -1,9 +1,9 @@
 # 数据路径配置
-data_path: "./src/data/low_scores_simulation_labeled.jsonl"
+data_path: "./src/data/test_mini.jsonl"
 
 # 模型选择配置
 models:
-  builder_model: "Qwen3-VL-2B-Thinking"
-  visual_copilot_model: "Qwen3-VL-2B-Thinking"
+  builder_model: "gpt-5-mini"
+  visual_copilot_model: "gpt-5-mini"
   webvoyager_model: "gpt-5-mini"
   user_model: "deepseek-v3.2"

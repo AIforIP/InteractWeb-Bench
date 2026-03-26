@@ -1,20 +1,20 @@
-sudo apt-get purge -y nodejs npm
+#!/bin/bash
 
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs           # installs node + npm
+# 1. 安装 NVM (如果尚未安装)
+if [ ! -d "$HOME/.nvm" ]; then
+    echo "正在安装 NVM..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+fi
 
-
-# 1) install nvm (loads into ~/.nvm)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.6/install.sh | bash
-exec $SHELL        # reload shell so `nvm` is on PATH
-
+# 2. 加载 NVM 环境
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# 2) install and activate the exact version
+# 3. 安装项目需要的指定版本 (v22.14.0)
+echo "正在安装 Node v22.14.0..."
 nvm install 22.14.0
-nvm use     22.14.0
-nvm alias default 22.14.0   # optional – make it the new default
 
-
+# 4. 验证版本切换
+nvm use 22.14.0
+echo "当前项目使用的 Node 版本: $(node -v)"
+echo "系统原始版本依然存在，你可以通过 'nvm use system' 切回 v12"

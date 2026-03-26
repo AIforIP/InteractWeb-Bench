@@ -35,7 +35,8 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
         "   - If an item is broken/missing: `[FAILED ID: X] Reason: why it failed`\n"
         "   - **FATAL RULE: You MUST write ALL your findings inside a SINGLE contiguous paragraph. DO NOT use line breaks (\\n). DO NOT output the word 'Thought:' more than once!**\n"
         "   Example: 'Clicking the date picker did nothing. [FAILED ID: 1] Reason: Date picker is unresponsive. I will stop trying this and check the background color next. [PASSED ID: 4] Reason: Background is papaya whip.'\n"
-        "4. When you have tested or skipped all items, output: `Action: ANSWER; Exploration complete`."
+        "4. When you have tested or skipped all items, output: `Action: ANSWER; Exploration complete`.\n"
+        "5. **IGNORE TESTING ARTIFACTS (CRITICAL)**: The numerical labels (e.g., [0], [1]) and colored bounding/dashed boxes on the screenshot are injected by our automated testing framework. You MUST IGNORE them. Do NOT treat them as 'unrequested UI elements' and do NOT let them cause any checklist item to fail."
     )
 
     task = {
@@ -43,6 +44,23 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
         "web": target_url,
         "ques": eval_ques
     }
+
+    # =================================================================
+    # 🌟 核心注入点：定义打分专用的方括号交卷模板，并动态注入到 args_dict 中
+    # 这样 run.py 发生死循环触发交卷时，就会乖乖吐出 [FAILED ID: X] 格式
+    # =================================================================
+    eval_limit_prompt = (
+        "You have reached the maximum number of allowed interactions with the website.\n\n"
+        "Please evaluate the outcome of your attempts based on the Testing Checklist provided at the beginning of our conversation.\n"
+        "Now, please stop exploring and output your final report using the 'ANSWER' action.\n"
+        "You MUST strictly follow the format: [FAILED ID: X] Reason: ... or [PASSED ID: X] Reason: ... for every ID requested earlier. Do NOT use XML. Keep your reasons concise.\n"
+        "Example format:\n"
+        "Thought: Evaluation complete.\n"
+        "Action: ANSWER;\n"
+        "[FAILED ID: 0] Reason: The feature could not be tested because clicking the button had no response.\n"
+        "[PASSED ID: 1] Reason: The navigation link was visible and correct."
+    )
+    args_dict["limit_prompt_template"] = eval_limit_prompt
 
     # 3. 运行 WebVoyager
     messages = run_single_task(task, args_dict)
@@ -271,6 +289,10 @@ window.prompt = function(msg, defaultText) {
 
             # 配置 WebVoyager 测试参数
             debug_log_dir = os.path.join(project_root, "experiment_results", "standalone_test_log", task_folder_name)
+
+            # 🧹 防止独立测试脚本的缓存干扰，先清空历史打分记录
+            if os.path.exists(debug_log_dir):
+                shutil.rmtree(debug_log_dir, ignore_errors=True)
             os.makedirs(debug_log_dir, exist_ok=True)
 
             test_args_dict = {
@@ -284,7 +306,8 @@ window.prompt = function(msg, defaultText) {
                 "save_accessibility_tree": False,
                 "max_attached_imgs": 3,
                 "max_iter": 10,
-                "api_model": "gpt-4o-mini",
+                # ✅ 关键修正：确保使用支持视觉功能的评估模型！防止 Base64 引起 Token 爆炸死循环。
+                "api_model": "gpt-5-mini",
                 "seed": 42
             }
 

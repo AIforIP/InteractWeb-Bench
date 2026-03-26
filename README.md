@@ -14,7 +14,15 @@ conda activate InteractWeb-Bench
 pip install -r requirements.txt
 playwright install chromium
 ```
-
+安装Node.js
+```bash
+chmod +x install_node.sh
+./install_node.sh
+```
+或者直接用 bash 运行（不需要赋权）：
+```bash
+bash install_node.sh
+```
 ### 2. 🔑 环境变量配置
 
 本项目使用 `.env` 文件来管理 API 密钥。请参考根目录下的 `.env.example` 文件进行配置。

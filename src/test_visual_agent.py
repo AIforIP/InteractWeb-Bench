@@ -65,9 +65,28 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
         # 2. 启动可见的浏览器界面
         print(f"🔗 正在访问目标网址: {url}")
         env.playwright = sync_playwright().start()
-        env.browser = env.playwright.chromium.launch(headless=True)
+        env.browser = env.playwright.chromium.launch(headless=False)
         env.context = env.browser.new_context(viewport={'width': 1280, 'height': 800})
         env.page = env.context.new_page()
+
+        # =========================================================================
+        # ✅ 安全增强：使用 Playwright 提前注入原生弹窗视觉化接管脚本
+        # 确保大模型能在截图中清晰地“看到” alert/confirm 里的报错或成功提示
+        # （由于用了 add_init_script，它会抢在网页自身 JS 之前执行拦截）
+        # =========================================================================
+        env.page.add_init_script("""
+            function renderSystemPopup(msg, type) {
+                var d = document.createElement('div');
+                d.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#f44336;color:white;padding:15px;z-index:2147483647;border-radius:5px;box-shadow:0 4px 6px rgba(0,0,0,0.3);font-family:sans-serif;font-size:16px;max-width:80%;word-wrap:break-word;';
+                d.innerHTML = '<b>System ' + type + ':</b><br>' + msg;
+                document.body.appendChild(d);
+                setTimeout(function(){ if(d.parentNode) d.remove(); }, 6000);
+            }
+            window.alert = function(msg) { renderSystemPopup(msg, 'Alert'); return true; };
+            window.confirm = function(msg) { renderSystemPopup(msg, 'Confirm'); return true; };
+            window.prompt = function(msg, defaultText) { renderSystemPopup(msg, 'Prompt'); return 'TestInput'; };
+        """)
+
         env.page.goto(url, wait_until="networkidle", timeout=15000)
         env.console_logs = []
 
@@ -146,40 +165,33 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
 if __name__ == "__main__":
     # ================= 配置区域 =================
 
-    # 1. 网页项目源代码目录 (指向你刚刚生成的 000014_P-RAM 工作区)
-    PROJECT_DIR = "/home/hhr/home/hhr/experiment_results/gpt-5-mini/workspaces/000014_P-RAM"
+    # 1. 网页项目源代码目录 (填入你生成的代码文件夹绝对路径)
+    # 只要填了这里，脚本就会自动进去执行 npm install / npm run dev
+    PROJECT_DIR = r"E:\Agent_work\src\experiment_results\workspaces\000002_P-RAM"
 
-    # 2. 启动服务的命令
+    # 2. 启动服务的命令 (如果是静态 HTML 请留空 None)
     START_CMD = "npm run dev"
 
     # 3. 浏览器要访问的目标地址
     TARGET_WEB_URL = "http://localhost:3000"
 
-    # 4. 数据集路径与索引 (指向你实际的 jsonl 文件)
-    JSONL_FILE_PATH = "/home/hhr/home/hhr/src/data/test_mini.jsonl"
-
-    # 注意：你需要将这里的 Index 改为 000014_P-RAM 在 jsonl 文件中实际的行号（从0开始计）
-    # 如果只是为了测试视觉能力，你也可以直接将下面 instruction 写死成字符串
+    # 4. 数据集路径与索引
+    JSONL_FILE_PATH = r"E:\Agent_work\src\data_generation\test_mini.jsonl"
     TEST_DATA_INDEX = 0
-
-    # 5. 指定本地视觉模型名称 (必须包含 qwen 以触发你们的动态路由)
-    LOCAL_VLM_MODEL = "Qwen/Qwen3-VL-2B-Thinking"
 
     # ===========================================
 
     try:
-        # 如果 jsonl 提取报错，可以直接将 instruction = "用户具体的网页需求文本"
         task_id, instruction = extract_instruction_from_jsonl(JSONL_FILE_PATH, TEST_DATA_INDEX)
         print(f"=====================================")
-        print(f"成功加载任务 ID: {task_id}")
+        print(f"📋 成功加载任务 ID: {task_id}")
         print(f"=====================================")
 
         run_standalone_visual_test(
             target_url=TARGET_WEB_URL,
             ground_truth_instruction=instruction,
             project_dir=PROJECT_DIR,
-            start_cmd=START_CMD,
-            vlm_model=LOCAL_VLM_MODEL  # 强制传入本地模型名称
+            start_cmd=START_CMD
         )
     except Exception as err:
         print(f"初始化失败: {err}")
