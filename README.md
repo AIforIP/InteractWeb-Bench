@@ -110,7 +110,7 @@ bash src/scripts/deploy_qwen_3b_thinking.sh
 ```bash
 python src/experiment/run_simulation.py
 ```
-### 5. Docker 部署与评测指南
+### 6. Docker 部署与评测指南
 请获取系统配套的 Docker 镜像压缩包 `interactweb-bench_v1.0.tar`，并在目标服务器的终端执行以下命令加载镜像：
 
 ```bash
