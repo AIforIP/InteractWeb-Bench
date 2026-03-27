@@ -5,7 +5,8 @@
 !.env.example
 !src/
 .env
-
+!data/
+!scripts/
 # 之前 src 里的排除规则
 src/data_generation/
 src/experiment_results/

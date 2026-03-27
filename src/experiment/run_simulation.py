@@ -22,7 +22,7 @@ except ImportError:
     # 兼容性导入，以防在不同目录下运行
     from webvoyager_evaluator import evaluate_with_webvoyager
 
-DEFAULT_DATA_PATH = r"/home/hhr/home/hhr/src/data_generation/test_mini.jsonl"
+DEFAULT_DATA_PATH = r"data/test_mini.jsonl"
 DEFAULT_OUTPUT_DIR = r"experiment_results"
 
 MAX_TURNS_MAPPING = {"easy": 15, "middle": 20, "hard": 25}
