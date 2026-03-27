@@ -110,3 +110,20 @@ bash src/scripts/deploy_qwen_3b_thinking.sh
 ```bash
 python src/experiment/run_simulation.py
 ```
+### 5. Docker 部署与评测指南
+请获取系统配套的 Docker 镜像压缩包 `interactweb-bench_v1.0.tar`，并在目标服务器的终端执行以下命令加载镜像：
+
+```bash
+docker load -i interactweb-bench_v1.0.tar
+```
+运行评测容器
+```bash
+docker run -it --rm \
+  --name interactweb_test \
+  --network host \
+  -v /宿主机绝对路径/data:/app/data \
+  -v /宿主机绝对路径/experiment_results:/app/experiment_results \
+  -v /宿主机绝对路径/.env:/app/.env \
+  -v /宿主机绝对路径/config.yaml:/app/config.yaml \
+  interactweb-bench:v1.0
+```
