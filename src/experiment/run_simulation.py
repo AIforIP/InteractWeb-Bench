@@ -5,29 +5,70 @@ import sys
 import subprocess
 import time
 import shutil
-import yaml
+import socket
+import concurrent.futures
+from contextlib import closing
+from dotenv import load_dotenv
+
 # 将 src 加入路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# 加载环境变量
+load_dotenv()
+
 from agent.webgen_agent import WebGenAgent
 from experiment.simulation_agents import UserSimulator
-# 【修改 1】引入 force_kill_port_3000
-from utils.execute_for_feedback import execute_for_feedback, force_kill_port_3000
 
-# 【新增】导入 WebVoyager 评估器
-# 确保 webvoyager_evaluator.py 位于 src/experiment/ 目录下
+# 移除了写死的 force_kill_port_3000，引入 is_port_open
+from utils.execute_for_feedback import execute_for_feedback, is_port_open
+
+# 导入 WebVoyager 评估器
 try:
     from experiment.webvoyager_evaluator import evaluate_with_webvoyager
 except ImportError:
-    # 兼容性导入，以防在不同目录下运行
     from webvoyager_evaluator import evaluate_with_webvoyager
 
-DEFAULT_DATA_PATH = r"data/test_mini.jsonl"
-DEFAULT_OUTPUT_DIR = r"experiment_results"
+DEFAULT_DATA_PATH = r"/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
+DEFAULT_OUTPUT_DIR = r"/home/hhr/home/experiment_results"
 
 MAX_TURNS_MAPPING = {"easy": 15, "middle": 20, "hard": 25}
 ERROR_LIMIT_MAPPING = {"easy": 6, "middle": 8, "hard": 10}
 MAX_SIMULATION_STEPS = 8
+
+
+# ==============================================================================
+#  核心工具函数
+# ==============================================================================
+def find_free_port():
+    """向操作系统申请一个绝对安全的随机空闲端口"""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
+def get_vlm_endpoint(model_name: str) -> str:
+    """
+    解析 .env 中的 LOCAL_MODELS_MAP，根据模型名动态返回对应的 API URL。
+    如果本地路由表中没有该模型，则回退到 OPENAILIKE_VLM_BASE_URL。
+    """
+    raw_map = os.environ.get("LOCAL_MODELS_MAP", "")
+    expanded_map = os.path.expandvars(raw_map)
+
+    routes = {}
+    if expanded_map:
+        for pair in expanded_map.split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                routes[k.strip()] = v.strip()
+
+    if model_name in routes:
+        print(f"   [路由] 模型 {model_name} 匹配到本地节点: {routes[model_name]}")
+        return routes[model_name]
+    else:
+        fallback_url = os.environ.get("OPENAILIKE_VLM_BASE_URL", "https://api.chatanywhere.tech/v1")
+        print(f"   [路由] 模型 {model_name} 走云端默认节点: {fallback_url}")
+        return fallback_url
 
 
 # ==============================================================================
@@ -64,106 +105,104 @@ def save_interaction_history(messages, output_file, violating_chitchat_count):
 
 
 # ==============================================================================
-#  评估逻辑 (已替换为 WebVoyager Agent-as-a-Judge)
+#  评估逻辑 (并发端口隔离 + 动态模型路由)
 # ==============================================================================
 def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_slots, user_instruction, task_id, args,
-                             stop_reason="submitted"):
-    print(f"\n⚡ 正在执行最终评估 (原因: {stop_reason})...")
+                             app_port, stop_reason="submitted"):
+    print(f"\n[系统] 正在执行最终评估 (任务: {task_id}, 端口: {app_port}, 原因: {stop_reason})...")
 
-    # 强制验证打分标准是否存在
     if not oracle_slots:
         print("\033[91m[警告] 传入的 oracle_slots 为空！本次评估注定为 0 分。\033[0m")
     else:
         print(f"   [系统] 成功加载 {len(oracle_slots)} 项打分标准，准备启动 WebVoyager 验收。")
 
-    # 1. 生成最终截图 (此步骤结束后，execute_for_feedback 会把服务器关闭)
-    #    我们需要截图作为最后的留档，但 WebVoyager 会自己重新截图
-    env_info = execute_for_feedback(workspace_dir, log_dir, step_idx="final_eval")
+    # 动态构建启动命令并将端口传给探活机制
+    dynamic_start_cmd = f"npm run dev -- --port {app_port}"
+    env_info = execute_for_feedback(
+        project_dir=workspace_dir,
+        log_dir=log_dir,
+        start_cmd=dynamic_start_cmd,
+        step_idx="final_eval",
+        app_port=app_port
+    )
 
     if env_info.get("start_error"):
-        # 如果代码本身就有语法错误导致起不来，直接 0 分
         eval_result = {
             "status": "CRASHED", "sr": 0, "tcr": 0.0,
             "text": f"Evaluation failed: Server Crash.\n{env_info.get('start_results')}",
             "raw_metrics": {"Total_Weight": 0.0, "Details": []}
         }
     else:
-        # ==========================================
-        #  启动 WebVoyager 评估流程
-        # ==========================================
-        print("   [系统] 正在为 WebVoyager 打分程序唤醒前端服务器...")
+        print(f"   [系统] 正在启动前端服务器 (指定端口: {app_port})...")
 
-        # 【关键修复 1】：在启动 WebVoyager 专属服务器前，无情剿灭 3000 端口幽灵！
-        os.system("fuser -k 3000/tcp >/dev/null 2>&1")
-        import platform
-        if platform.system() == "Windows":
-            os.system("taskkill /f /im chromedriver.exe /t >nul 2>&1")
-            os.system("taskkill /f /im chrome.exe /t >nul 2>&1")
-        else:
-            os.system("pkill -f chromedriver >/dev/null 2>&1")
-            os.system("pkill -f chrome >/dev/null 2>&1")
-        # 3. 【你的策略】：冷却期。等待 5~8 秒，让操作系统彻底回收文件锁，并避开网络限流
-        print("   [系统] 进入冷却期，等待系统释放底层驱动资源...")
-        time.sleep(8)
-
-        # 启动前端开发服务器
+        # 动态绑定端口启动前端 (适应 Vite/CRA 等框架)
         server_process = subprocess.Popen(
-            "npm run dev",
+            dynamic_start_cmd,
             cwd=workspace_dir,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=True
         )
 
-        # 必须给服务器 5 秒钟的冷启动时间
-        time.sleep(5)
+        # 智能探活
+        print(f"   [系统] 等待 localhost:{app_port} 端口就绪...")
+        for _ in range(30):
+            if is_port_open(app_port):
+                print(f"   [系统] 端口 {app_port} 已连通！")
+                break
+            time.sleep(1)
+        else:
+            print(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。\033[0m")
 
         try:
-            # 2. 配置 WebVoyager 参数
-            # 将评估日志与生成日志分开，避免混淆
             eval_log_dir = os.path.join(log_dir, "eval_webvoyager")
             eval_download_dir = os.path.join(log_dir, "eval_downloads")
 
-            import shutil
-            if os.path.exists(eval_log_dir):
-                shutil.rmtree(eval_log_dir, ignore_errors=True)
+            shutil.rmtree(eval_log_dir, ignore_errors=True)
             os.makedirs(eval_log_dir, exist_ok=True)
-
-            if os.path.exists(eval_download_dir):
-                shutil.rmtree(eval_download_dir, ignore_errors=True)
+            shutil.rmtree(eval_download_dir, ignore_errors=True)
             os.makedirs(eval_download_dir, exist_ok=True)
+
+            # 获取动态 VLM 路由和 API Key
+            target_model = args.webvoyager_model
+            assigned_vlm_url = get_vlm_endpoint(target_model)
+            api_key = os.environ.get(
+                "OPENAILIKE_VLM_API_KEY") if "chatanywhere" in assigned_vlm_url else "sk-local-test"
 
             wv_args_dict = {
                 "output_dir": eval_log_dir,
                 "download_dir": eval_download_dir,
-                "window_width": 1200,
+                "window_width": 1280,
                 "window_height": 800,
-                "headless": True,  # 设为 False 可在本地看到浏览器弹窗
+                "headless": True,  # 并发时强制无头模式
                 "text_only": False,
                 "fix_box_color": False,
                 "save_accessibility_tree": False,
-                "max_attached_imgs": 3,
-                "max_iter": 16,  # 限制评估步数，防止死循环
-                "api_model": args.webvoyager_model,
+                "max_attached_imgs": 1,  # 极限控制 Token
+                "max_iter": 16,
+                "api_model": target_model,
+                "vlm_base_url": assigned_vlm_url,  # 动态路由注入
+                "vlm_api_key": api_key,  # 动态密钥注入
                 "seed": 42
             }
 
-            print(f"   [系统] WebVoyager 评估代理已切入网页 (Model: {args.webvoyager_model})...")
+            print(f"   [系统] WebVoyager 代理已切入 (模型: {target_model} | 节点: {assigned_vlm_url})...")
 
-            # 3. 调用 WebVoyager 进行打分 (支持 oracle_slots 加权)
+            # 动态拼接 target_url 传给 WebVoyager
+            target_url = f"http://localhost:{app_port}/"
             raw_eval_result = evaluate_with_webvoyager(
-                target_url="http://localhost:3000",
+                target_url=target_url,
                 user_instruction=user_instruction,
                 oracle_slots=oracle_slots,
                 task_id=f"{task_id}_eval",
-                args_dict=wv_args_dict
+                args_dict=wv_args_dict,
+                app_port=app_port  # 传入以便底层也能验证
             )
 
-            # 4. 格式化结果
             eval_result = {
-                "status": "PASS" if raw_eval_result["Success_Rate_SR"] == 1 else "FAIL",
-                "sr": raw_eval_result["Success_Rate_SR"],
-                "tcr": raw_eval_result["Task_Completion_Rate_TCR"],
+                "status": "PASS" if raw_eval_result.get("Success_Rate_SR", 0) == 1 else "FAIL",
+                "sr": raw_eval_result.get("Success_Rate_SR", 0),
+                "tcr": raw_eval_result.get("Task_Completion_Rate_TCR", 0.0),
                 "text": "WebVoyager evaluation complete. Check details in raw_metrics.",
                 "raw_metrics": raw_eval_result
             }
@@ -173,22 +212,19 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             eval_result = {
                 "status": "ERROR", "sr": 0, "tcr": 0.0,
                 "text": f"Evaluation Error: {str(e)}",
-                "raw_metrics": {}
+                "raw_metrics": {"Total_Weight": 0.0, "Details": []}
             }
         finally:
-            # ==========================================
-            #  打分结束，强制关闭服务器
-            # ==========================================
-            force_kill_port_3000()
-            os.system("taskkill /f /im chromedriver.exe /t >nul 2>&1")
-            os.system("taskkill /f /im chrome.exe /t >nul 2>&1")
-            print("   [系统] 打分完毕，正在清理端口占用...")
-
-
+            # 安全清理专属的 Node.js 进程
+            if 'server_process' in locals() and server_process.poll() is None:
+                try:
+                    server_process.terminate()
+                    server_process.wait(timeout=3)
+                except Exception:
+                    server_process.kill()
 
     print(f"   => Final TCR: {eval_result.get('tcr', 0.0) * 100:.1f}% | Status: {eval_result.get('status')}")
 
-    # 3. 将打分详情写入日志
     builder.messages.append({
         "role": "user",
         "content": f"[SYSTEM]: Task Stopped ({stop_reason}).\nEvaluation Report:\n{eval_result.get('text', '')}\nDetails: {json.dumps(eval_result.get('raw_metrics', {}).get('Details', []), indent=2)}",
@@ -207,40 +243,26 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
 #  任务运行引擎
 # ==============================================================================
 def run_single_task(task, args):
-    # 1. 提取 task_id 并统一转为字符串，防止路径拼接报错
-    task_id = str(task.get("id", "unknown"))
-
-    # 2. 提前计算路径
-    safe_model_name = args.builder_model.replace("/", "-").replace(":", "-")
-    workspace_dir = os.path.join(args.output_dir, safe_model_name, "workspaces", task_id)
-    log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
-    history_file = os.path.join(log_dir, "interaction_history.json")
-
-    # 3. 断点续传检查：如果没开启覆盖模式，且最终的历史记录文件已存在，跳过当前任务
-    if not args.overwrite and os.path.exists(history_file):
-        print(f"\n==== Task {task_id} ==== [已完成，触发断点续传，跳过当前任务]")
-        return
-
-    # 4. 脏数据清理：如果发现残留的中断数据（有文件夹但无最终 json），进行清理
-    if not args.overwrite and (os.path.exists(workspace_dir) or os.path.exists(log_dir)):
-        print(f"\n==== Task {task_id} ==== [发现残留的中断数据，正在清理并重新开始]")
-        import shutil
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        shutil.rmtree(log_dir, ignore_errors=True)
-
-    # 1. 把提取难度的默认值改为字典中不存在的 "test"
-    difficulty = task.get("difficulty", "test")
+    task_id = task.get("id", "unknown")
+    difficulty = task.get("difficulty", "middle")
     persona = task.get("persona", "P-MIN")
     ground_truth = task.get("ground_truth_instruction", task.get("instruction"))
     user_instruction = task.get("instruction")
     current_oracle_slots = task.get("oracle_slots", [])
 
-    # 2. 此时字典找不到 "test"，就会生效后备值 3 和 2
-    max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 3)
-    error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 2)
-    print(f"\n==== Task {task_id} [{difficulty.upper()}] 开始运行 ====")
+    max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 20)
+    error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 5)
 
-    # 初始化 WebGenAgent 时，传入修改后的目录
+    # 动态分配当前任务的独立端口
+    app_port = find_free_port()
+
+    print(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
+
+    safe_model_name = args.builder_model.replace("/", "-").replace(":", "-")
+    workspace_dir = os.path.join(args.output_dir, safe_model_name, "workspaces", task_id)
+    log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
+
+    # WebGenAgent 内部测试时使用分配的端口
     builder = WebGenAgent(
         model=args.builder_model,
         vlm_model=args.visual_copilot_model,
@@ -252,9 +274,10 @@ def run_single_task(task, args):
         overwrite=args.overwrite,
         error_limit=error_limit,
         difficulty=difficulty,
-        max_simulation_steps=MAX_SIMULATION_STEPS
+        max_simulation_steps=MAX_SIMULATION_STEPS,
+        app_port=app_port
     )
-    # UserSimulator 通常用于模拟用户行为，继续使用原本的参数即可
+
     user_sim = UserSimulator(
         ground_truth_instruction=task.get("ground_truth_instruction", user_instruction),
         initial_instruction=user_instruction,
@@ -265,79 +288,60 @@ def run_single_task(task, args):
     turn_counter = 0
     loop_idx = 0
     is_graded = False
-    consecutive_no_tag_chitchat = 0
     total_violating_chitchat = 0
 
     while turn_counter < max_turns:
-        print(f"\n--- Turn {turn_counter + 1}/{max_turns} ---")
+        print(f"\n--- Task {task_id} | Turn {turn_counter + 1}/{max_turns} ---")
 
         action, is_failed = builder.step(loop_idx, simulation_mode=True)
         builder.save_history(loop_idx)
         loop_idx += 1
-        
+
         raw_output = builder.messages[-1]["content"] if builder.messages else ""
 
         if action["type"] == "question":
             has_valid_tag = any(tag in raw_output for tag in ["<boltAction", "<boltArtifact"])
 
-            #  1. 触发零容忍格式审查
             if not has_valid_tag:
                 total_violating_chitchat += 1
-                print(
-                    f"\033[93m   [拦截] Agent 输出了无效格式的纯文本 (累计违规: {total_violating_chitchat}次)，正在强制要求重试...\033[0m")
-
-                # 【安全熔断机制】防止劣质模型无限死循环卡死程序并消耗巨额 API 费用
                 if total_violating_chitchat >= 10:
-                    print("\033[91m   [致命错误] Agent 累计格式违规达到 10 次，触发安全熔断，强制终止当前任务！\033[0m")
                     is_graded = False
-                    break  # 跳出 while 循环，进入兜底评估阶段
-
-                # 注入系统强警告
-                system_feedback = "SYSTEM ALERT: Invalid format. You MUST use `<boltArtifact>` or `<boltAction>` tags to interact. Plain text chitchat is strictly prohibited. Please regenerate your response using the correct XML tags."
+                    break
+                system_feedback = "SYSTEM ALERT: Invalid format. You MUST use `<boltArtifact>` or `<boltAction>` tags."
                 builder.messages.append({"role": "user", "content": system_feedback})
-
-                # 注意：这里不增加 turn_counter！
-                # 这意味着重试操作不算作消耗用户的交互轮数
                 continue
 
-            #  2. 格式合规的正常提问 (<boltAction type="ask_user">)
             answer = user_sim.answer_question(action["content"])
             builder.messages.append({"role": "user", "content": answer})
-            turn_counter += 1  # 只有正常的业务交互才消耗一轮
-            continue
-
-        consecutive_no_tag_chitchat = 0
-
-        if action["type"] == "coding":
             turn_counter += 1
             continue
-        elif action["type"] == "internal_test":
+
+        if action["type"] in ["coding", "internal_test"]:
             if builder.is_finished: break
             turn_counter += 1
             continue
         elif action["type"] == "submitted":
-            # 调用 perform_final_evaluation
             perform_final_evaluation(
                 builder, user_sim, workspace_dir, log_dir,
                 oracle_slots=current_oracle_slots,
                 user_instruction=ground_truth,
                 task_id=task_id,
                 args=args,
+                app_port=app_port,  # 传入独立的端口
                 stop_reason="submitted"
             )
             is_graded = True
             break
 
-    # 兜底评估：处理超时或 Deadlock 熔断的情况
     if not is_graded:
         reason = "max_turns_reached" if turn_counter >= max_turns else "verification_deadlock"
-        # 兜底评估
         perform_final_evaluation(
             builder, user_sim, workspace_dir, log_dir,
             oracle_slots=current_oracle_slots,
             user_instruction=user_instruction,
             task_id=task_id,
             args=args,
+            app_port=app_port,  # 传入独立的端口
             stop_reason=reason
         )
 
@@ -346,64 +350,88 @@ def run_single_task(task, args):
         os.path.join(log_dir, "interaction_history.json"),
         total_violating_chitchat
     )
+    return task_id
 
 
+# ==============================================================================
+#  主入口：并发控制
+# ==============================================================================
 def main():
-    # ==========================================
-    # 1. 读取 YAML 配置文件
-    # ==========================================
-    # 动态定位到项目根目录下的 config.yaml
-    current_file_path = os.path.abspath(__file__)
-    # src/experiment/run_simulation.py -> 向上退三级到项目根目录
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
-    config_path = os.path.join(project_root, "config.yaml")
+    import yaml  # 引入 yaml 解析库
 
-    config = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-            print(f"[系统] 成功加载配置文件: {config_path}")
-        except Exception as e:
-            print(f"\033[91m[错误] 读取 config.yaml 失败: {e}\033[0m")
-    else:
-        print(f"\033[93m[警告] 未找到 {config_path}，将使用系统默认硬编码值。\033[0m")
-
-    # ==========================================
-    # 2. 提取配置项 (带有后备默认值)
-    # ==========================================
-    yaml_data_path = config.get("data_path", DEFAULT_DATA_PATH)
-    models_cfg = config.get("models", {})
-
-    # ==========================================
-    # 3. 设置命令行参数解析
-    # ==========================================
     parser = argparse.ArgumentParser()
-    # 使用 yaml_data_path 作为 data_path 的默认值
-    parser.add_argument("--data_path", type=str, default=yaml_data_path)
-    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
+    # 1. 新增 --config 参数
+    parser.add_argument("--config", type=str, help="YAML配置文件的路径")
 
-    # 优先使用 yaml 中的模型配置，如果 yaml 没写，则回退到原来的默认值
-    parser.add_argument("--builder_model", type=str, default=models_cfg.get("builder_model", "gpt-5-mini"))
-    parser.add_argument("--visual_copilot_model", type=str,
-                        default=models_cfg.get("visual_copilot_model", "gpt-5-mini"))
-    parser.add_argument("--webvoyager_model", type=str, default=models_cfg.get("webvoyager_model", "gpt-5-mini"))
-    parser.add_argument("--user_model", type=str, default=models_cfg.get("user_model", "deepseek-v3.2"))
+    # 2. 保留原有的参数作为默认值（如果配置文件没写，就用这些）
+    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH)
+    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--builder_model", type=str, default="gpt-4.1")
+    parser.add_argument("--visual_copilot_model", type=str, default="gpt-4.1")
+    parser.add_argument("--webvoyager_model", type=str, default="gpt-5-mini")
+    parser.add_argument("--user_model", type=str, default="deepseek-v3.2")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--max_workers", type=int, default=1, help="同时并发执行的任务数量")
 
     args = parser.parse_args()
 
-    # 检查输入文件是否存在
+    # 3. 如果传入了 --config，则读取 YAML 并覆盖 args 中的属性
+    if args.config:
+        if not os.path.exists(args.config):
+            print(f"❌ 错误: 找不到配置文件 {args.config}")
+            return
+
+        with open(args.config, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+
+        if config_data:
+            # 覆盖顶层配置
+            if "data_path" in config_data:
+                args.data_path = config_data["data_path"]
+            if "output_dir" in config_data:
+                args.output_dir = config_data["output_dir"]
+            if "max_workers" in config_data:
+                args.max_workers = config_data["max_workers"]
+
+            # 覆盖嵌套的 models 配置
+            if "models" in config_data:
+                models_cfg = config_data["models"]
+                if "builder_model" in models_cfg:
+                    args.builder_model = models_cfg["builder_model"]
+                if "visual_copilot_model" in models_cfg:
+                    args.visual_copilot_model = models_cfg["visual_copilot_model"]
+                if "webvoyager_model" in models_cfg:
+                    args.webvoyager_model = models_cfg["webvoyager_model"]
+                if "user_model" in models_cfg:
+                    args.user_model = models_cfg["user_model"]
+
+    # 4. 校验最终的数据路径
     if not os.path.exists(args.data_path):
-        print(f"\033[91m[错误] 数据文件不存在: {args.data_path}\033[0m")
+        print(f"❌ 错误: 找不到数据文件 {args.data_path}")
         return
 
     with open(args.data_path, "r", encoding="utf-8") as f:
         tasks = [json.loads(line) for line in f if line.strip()]
 
     print(f"Loaded {len(tasks)} tasks.")
-    for task in tasks:
-        run_single_task(task, args)
+    print(f" 准备启动并发测试 | 并发数: {args.max_workers}")
+    print(f" Builder 模型: {args.builder_model}")
+    print(f" Copilot 模型: {args.visual_copilot_model}")
+    print(f" User 模型: {args.user_model}")
+    print(f" WebVoyager 模型: {args.webvoyager_model}")
+
+    # 使用 ProcessPoolExecutor 进行并发
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = []
+        for task in tasks:
+            futures.append(executor.submit(run_single_task, task, args))
+
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                finished_task_id = future.result()
+                print(f"✅ 任务 {finished_task_id} 整体流程执行完毕。")
+            except Exception as e:
+                print(f"❌ 任务执行期间发生未捕获异常: {e}")
 
 
 if __name__ == "__main__":

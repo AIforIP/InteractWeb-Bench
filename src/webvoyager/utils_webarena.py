@@ -1,5 +1,6 @@
 from typing import Any, TypedDict
 import re
+from playwright.sync_api import Page
 
 
 class AccessibilityTreeNode(TypedDict):
@@ -32,6 +33,7 @@ class BrowserInfo(TypedDict):
     DOMTree: dict[str, Any]
     config: BrowserConfig
 
+
 IGNORED_ACTREE_PROPERTIES = (
     "focusable",
     "editable",
@@ -47,13 +49,14 @@ AccessibilityTree = list[AccessibilityTreeNode]
 IN_VIEWPORT_RATIO_THRESHOLD = 0.6
 
 
-
 def fetch_browser_info(
-    # page: Page,
-    browser,
+        page: Page,
 ) -> BrowserInfo:
+    # 建立 CDP (Chrome DevTools Protocol) 会话
+    client = page.context.new_cdp_session(page)
+
     # extract domtree
-    tree = browser.execute_cdp_cmd(
+    tree = client.send(
         "DOMSnapshot.captureSnapshot",
         {
             "computedStyles": [],
@@ -65,23 +68,20 @@ def fetch_browser_info(
     # calibrate the bounds, in some cases, the bounds are scaled somehow
     bounds = tree["documents"][0]["layout"]["bounds"]
     b = bounds[0]
-    n = b[2] / browser.get_window_size()["width"]
+    # Playwright 获取视口宽度
+    viewport_width = page.viewport_size["width"]
+    n = b[2] / viewport_width
     bounds = [[x / n for x in bound] for bound in bounds]
     tree["documents"][0]["layout"]["bounds"] = bounds
 
     # extract browser info
-    # win_top_bound = page.evaluate("window.pageYOffset")
-    # win_left_bound = page.evaluate("window.pageXOffset")
-    # win_width = page.evaluate("window.screen.width")
-    # win_height = page.evaluate("window.screen.height")
-
-    win_top_bound = browser.execute_script("return window.pageYOffset;")
-    win_left_bound = browser.execute_script("return window.pageXOffset;")
-    win_width = browser.execute_script("return window.screen.width;")
-    win_height = browser.execute_script("return window.screen.height;")
+    win_top_bound = page.evaluate("window.pageYOffset")
+    win_left_bound = page.evaluate("window.pageXOffset")
+    win_width = page.evaluate("window.screen.width")
+    win_height = page.evaluate("window.screen.height")
     win_right_bound = win_left_bound + win_width
     win_lower_bound = win_top_bound + win_height
-    device_pixel_ratio = browser.execute_script("return window.devicePixelRatio;")
+    device_pixel_ratio = page.evaluate("window.devicePixelRatio")
     assert device_pixel_ratio == 1.0, "devicePixelRatio is not 1.0"
 
     config: BrowserConfig = {
@@ -100,14 +100,12 @@ def fetch_browser_info(
     return info
 
 
-
-
 def get_element_in_viewport_ratio(
-    elem_left_bound: float,
-    elem_top_bound: float,
-    width: float,
-    height: float,
-    config: BrowserConfig,
+        elem_left_bound: float,
+        elem_top_bound: float,
+        width: float,
+        height: float,
+        config: BrowserConfig,
 ) -> float:
     elem_right_bound = elem_left_bound + width
     elem_lower_bound = elem_top_bound + height
@@ -134,17 +132,15 @@ def get_element_in_viewport_ratio(
     return ratio
 
 
-
-
 def get_bounding_client_rect(
-    browser, backend_node_id: str
+        client, backend_node_id: str
 ) -> dict[str, Any]:
     try:
-        remote_object = browser.execute_cdp_cmd(
+        remote_object = client.send(
             "DOM.resolveNode", {"backendNodeId": int(backend_node_id)}
         )
         remote_object_id = remote_object["object"]["objectId"]
-        response = browser.execute_cdp_cmd(
+        response = client.send(
             "Runtime.callFunctionOn",
             {
                 "objectId": remote_object_id,
@@ -165,17 +161,18 @@ def get_bounding_client_rect(
             },
         )
         return response
-    except:
+    except Exception:
         return {"result": {"subtype": "error"}}
 
 
 def fetch_page_accessibility_tree(
-    info: BrowserInfo,
-    browser,
-    # client: CDPSession,
-    current_viewport_only: bool,
+        info: BrowserInfo,
+        page: Page,
+        current_viewport_only: bool,
 ) -> AccessibilityTree:
-    accessibility_tree: AccessibilityTree = browser.execute_cdp_cmd(
+    client = page.context.new_cdp_session(page)
+
+    accessibility_tree: AccessibilityTree = client.send(
         "Accessibility.getFullAXTree", {}
     )["nodes"]
 
@@ -201,7 +198,7 @@ def fetch_page_accessibility_tree(
             node["union_bound"] = [0.0, 0.0, 10.0, 10.0]
         else:
             response = get_bounding_client_rect(
-                browser, backend_node_id
+                client, backend_node_id
             )
             if response.get("result", {}).get("subtype", "") == "error":
                 node["union_bound"] = None
@@ -224,8 +221,8 @@ def fetch_page_accessibility_tree(
             parent_cursor = nodeid_to_cursor[parent_nodeid]
             # update the children of the parent node
             assert (
-                accessibility_tree[parent_cursor].get("parentId", "Root")
-                is not None
+                    accessibility_tree[parent_cursor].get("parentId", "Root")
+                    is not None
             )
             # remove the nodeid from parent's childIds
             index = accessibility_tree[parent_cursor]["childIds"].index(
@@ -281,7 +278,7 @@ def fetch_page_accessibility_tree(
 
 
 def parse_accessibility_tree(
-    accessibility_tree: AccessibilityTree,
+        accessibility_tree: AccessibilityTree,
 ) -> tuple[str, dict[str, Any]]:
     """Parse the accessibility tree into a string text"""
     node_id_to_idx = {}
@@ -345,7 +342,7 @@ def parse_accessibility_tree(
                     "text": node_str,
                 }
 
-        except:
+        except Exception:
             valid_node = False
 
         for _, child_node_id in enumerate(node["childIds"]):
@@ -379,8 +376,8 @@ def clean_accesibility_tree(tree_str: str) -> str:
             if match:
                 static_text = match.group(1)
                 if all(
-                    static_text not in prev_line
-                    for prev_line in prev_lines
+                        static_text not in prev_line
+                        for prev_line in prev_lines
                 ):
                     clean_lines.append(line)
         else:

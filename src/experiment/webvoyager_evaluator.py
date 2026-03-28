@@ -1,7 +1,17 @@
 import os
+import sys
 import re
 import json
 import argparse
+# 在脚本顶部添加：
+from utils.execute_for_feedback import is_port_open
+# ==============================================================================
+# 关键修正：将项目的 src 根目录强制加入环境变量，必须放在所有自定义模块导入之前
+# ==============================================================================
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from webvoyager.run import run_single_task
 
 # 假设项目中已存在 llm_generation 工具，用于发起纯文本对话
@@ -12,7 +22,21 @@ except ImportError:
 
 
 def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slots: list, task_id: str,
-                             args_dict: dict) -> dict:
+                             args_dict: dict, app_port: int) -> dict:  # 👈 新增 app_port
+
+    # =================================================================
+    # 0. 动态等待指定的应用端口就绪
+    # =================================================================
+    print(f"   [系统] 等待 localhost:{app_port} 端口就绪 (最长 30 秒)...")
+    for _ in range(30):
+        # 请确保引入了 is_port_open 函数
+        if is_port_open(app_port):
+            print(f"   [系统] 端口 {app_port} 已连通！开始测试。")
+            break
+        time.sleep(1)
+    else:
+        print(f"   [警告] 端口 {app_port} 未能就绪，测试可能会报错。")
+
     # 1. 构造检查清单
     checklist_str = ""
     for idx, slot in enumerate(oracle_slots):
@@ -22,7 +46,6 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
 
     # =================================================================
     # 2. 提示词设计 (步进式验证 / Step-wise Verification)
-    # 核心魔法：要求大模型边探索边在 Thought 里面记录得分点
     # =================================================================
     eval_ques = (
         f"You are a strict QA engineer verifying if the website satisfies: '{user_instruction}'.\n\n"
@@ -33,21 +56,24 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
         "3. **STEP-WISE VERIFICATION**: Document your findings in your 'Thought' immediately using EXACTLY these formats:\n"
         "   - If an item works: `[PASSED ID: X] Reason: your brief proof`\n"
         "   - If an item is broken/missing: `[FAILED ID: X] Reason: why it failed`\n"
-        "   - **FATAL RULE: You MUST write ALL your findings inside a SINGLE contiguous paragraph. DO NOT use line breaks (\\n). DO NOT output the word 'Thought:' more than once!**\n"
-        "   Example: 'Clicking the date picker did nothing. [FAILED ID: 1] Reason: Date picker is unresponsive. I will stop trying this and check the background color next. [PASSED ID: 4] Reason: Background is papaya whip.'\n"
-        "4. When you have tested or skipped all items, output: `Action: ANSWER; Exploration complete`.\n"
-        "5. **IGNORE TESTING ARTIFACTS (CRITICAL)**: The numerical labels (e.g., [0], [1]) and colored bounding/dashed boxes on the screenshot are injected by our automated testing framework. You MUST IGNORE them. Do NOT treat them as 'unrequested UI elements' and do NOT let them cause any checklist item to fail."
+        "   - **FATAL RULE: You MUST start your response with the exact word 'Thought: ' followed by your reasoning in a single paragraph. Then, output 'Action: ' on a new line!**\n"
+        "   Example format:\n"
+        "   Thought: Clicking the date picker did nothing. [FAILED ID: 1] Reason: Date picker is unresponsive. I will stop trying this and check the background color next. [PASSED ID: 4] Reason: Background is papaya whip.\n"
+        "   Action: Click [2]\n"
+        "4. When you have tested or skipped all items, output your final action as: `Action: ANSWER; Exploration complete`.\n"
+        "5. **IGNORE TESTING ARTIFACTS (CRITICAL)**: The numerical labels (e.g., [0], [1]) and colored bounding/dashed boxes on the screenshot are injected by our automated testing framework. You MUST IGNORE them.\n"
+        "6. **AUTO-FILLED DIALOGS (CRITICAL)**: Our framework instantly auto-fills native browser popups in the background. If you click an 'Add' or 'Create' button and immediately see a new item (e.g., 'Test Input Value') appear on the page, consider the addition function PASSED. Do NOT fail the item just because you didn't see an input form."
     )
 
+    # 🌟 将目标 URL 动态指向分配的 app_port
     task = {
         "id": task_id,
-        "web": target_url,
+        "web": f"http://localhost:{app_port}/",
         "ques": eval_ques
     }
 
     # =================================================================
     # 🌟 核心注入点：定义打分专用的方括号交卷模板，并动态注入到 args_dict 中
-    # 这样 run.py 发生死循环触发交卷时，就会乖乖吐出 [FAILED ID: X] 格式
     # =================================================================
     eval_limit_prompt = (
         "You have reached the maximum number of allowed interactions with the website.\n\n"
@@ -86,7 +112,7 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
                 matches = re.finditer(pattern, content, re.IGNORECASE | re.DOTALL)
 
                 for m in matches:
-                    status_str = m.group(1).upper()  # 提取是 PASSED 还是 FAILED
+                    status_str = m.group(1).upper()
                     idx_str = m.group(2).strip()
                     reason_text = m.group(3).strip().replace('\n', ' ')
 
@@ -130,7 +156,6 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
 
     tcr = round((passed_weight / total_weight), 4) if total_weight > 0 else 0.0
 
-    # 打印最终提取结果供核对
     print(f"   [系统] 共提取到 {sum(1 for d in details if d['passed'])} 项已通过指标。")
 
     return {
@@ -142,7 +167,10 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
 
 
 # ==============================================================================
-# 🛠️ 独立调试与修复模块 (针对 000010_P-INT 等崩溃修复)
+# 独立调试与测试模块 (可视化有头模式，不污染轨迹文件)
+# ==============================================================================
+# ==============================================================================
+# 独立调试与测试模块 (可视化有头模式，不污染轨迹文件)
 # ==============================================================================
 if __name__ == "__main__":
     import os
@@ -151,21 +179,31 @@ if __name__ == "__main__":
     import shutil
     import subprocess
     import time
-    import re  # 确保正则库已导入
+    import socket
+    from contextlib import closing
+
+
+    # 动态获取可用空闲端口的辅助函数
+    def find_free_port():
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+            s.bind(('', 0))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            return s.getsockname()[1]
+
 
     # 确保能找到项目根目录下的 utils 和 webvoyager 模块
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-    print("\n🚀 开始批量自动化恢复 ERROR 任务...")
+    print("\n 开始独立测试任务 (屏幕可视化模式 / 结果不写入轨迹)...")
 
     RETEST_JSONL_PATH = r"E:\Agent_work\src\data_generation\re_test1.jsonl"
     LOGS_ROOT_DIR = r"E:\Agent_work\src\experiment_results\gpt-4o-mini\logs"
     WORKSPACES_ROOT_DIR = r"E:\Agent_work\src\experiment_results\gpt-4o-mini\workspaces"
 
     if not os.path.exists(RETEST_JSONL_PATH):
-        print(f"❌ 找不到待修复文件列表: {RETEST_JSONL_PATH}")
+        print(f" 找不到待修复文件列表: {RETEST_JSONL_PATH}")
         sys.exit(1)
 
     # 1. 读取需要重测的任务列表
@@ -175,38 +213,33 @@ if __name__ == "__main__":
             if not line.strip(): continue
             try:
                 data = json.loads(line)
-                # 提取完整 task_id (例如 "000010_P-INT")
                 t_id = str(data.get("task_id") or data.get("id") or data.get("original_id"))
                 if t_id and t_id != "None":
                     tasks_to_retest.append(t_id)
             except Exception as e:
-                print(f"⚠️ 解析 jsonl 失败，跳过该行: {e}")
+                print(f" 解析 jsonl 失败，跳过该行: {e}")
 
-    # 去重处理
     tasks_to_retest = list(set(tasks_to_retest))
-    print(f"\n📋 共读取到 {len(tasks_to_retest)} 个需要重测的独立任务。")
+    print(f"\n 共读取到 {len(tasks_to_retest)} 个测试任务。")
 
-    # 2. 遍历重测
+    # 2. 遍历测试
     for current_idx, task_folder_name in enumerate(tasks_to_retest, 1):
         print(f"\n" + "=" * 60)
-        print(f"▶️ [{current_idx}/{len(tasks_to_retest)}] 正在处理任务: {task_folder_name}")
+        print(f" [{current_idx}/{len(tasks_to_retest)}] 正在可视化测试任务: {task_folder_name}")
         print("=" * 60)
 
         workspace_dir = os.path.join(WORKSPACES_ROOT_DIR, task_folder_name)
         history_json_path = os.path.join(LOGS_ROOT_DIR, task_folder_name, "interaction_history.json")
-        target_url = "http://localhost:3000"
         server_process = None
 
         try:
-            # 校验文件是否存在
             if not os.path.exists(history_json_path):
-                print(f"❌ 跳过: 找不到历史文件 {history_json_path}")
+                print(f" 跳过: 找不到历史文件 {history_json_path}")
                 continue
             if not os.path.exists(workspace_dir):
-                print(f"❌ 跳过: 找不到工作区 {workspace_dir}")
+                print(f" 跳过: 找不到工作区 {workspace_dir}")
                 continue
 
-            # 从 history.json 中提取要求
             with open(history_json_path, "r", encoding="utf-8") as f:
                 history_data = json.load(f)
 
@@ -215,82 +248,35 @@ if __name__ == "__main__":
             test_oracle_slots = last_turn["debug_info"].get("oracle_slots_used_for_grading", [])
 
             if not test_oracle_slots:
-                print(f"❌ 跳过: 日志中未找到 oracle_slots 打分标准。")
+                print(f" 跳过: 日志中未找到 oracle_slots 打分标准。")
                 continue
 
             print(f"   [系统] 成功加载 {len(test_oracle_slots)} 条测试标准。")
 
-            import platform
+            # ========================================================
+            # 💡 核心修改：动态分配端口，摒弃 3000
+            # ========================================================
+            app_port = find_free_port()
+            target_url = f"http://localhost:{app_port}"
 
-            if platform.system() == "Windows":
-                os.system("taskkill /f /im chromedriver.exe /t >nul 2>&1")
-                os.system("taskkill /f /im chrome.exe /t >nul 2>&1")
-            else:
-                os.system("pkill -f chromedriver >/dev/null 2>&1")
-                os.system("pkill -f chrome >/dev/null 2>&1")
-            time.sleep(1)
-
-            # =========================================================
-            # 修改核心区域：增强版拦截脚本注入
-            # =========================================================
-            index_html_path = os.path.join(workspace_dir, "index.html")
-            if os.path.exists(index_html_path):
-                with open(index_html_path, "r", encoding="utf-8") as f:
-                    html_content = f.read()
-
-                # 检查是否已经注入了包含 prompt 的完整拦截脚本
-                if "window.prompt = function" not in html_content:
-                    print("   [系统] 正在清理旧脚本并注入 Alert/Confirm/Prompt 全面拦截脚本...")
-                    injection = """
-<script>
-window.alert = function(msg) {
-    var d = document.createElement('div');
-    d.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#fff;border:2px solid #333;padding:15px;z-index:99999;box-shadow:0 4px 6px rgba(0,0,0,0.1);font-size:16px;color:#000;';
-    d.innerHTML = '<b>System Popup:</b> ' + msg + '<br><button style="margin-top:10px;" onclick="this.parentElement.remove()">OK</button>';
-    document.body.appendChild(d);
-};
-window.confirm = function(msg) {
-    window.alert("Confirm requested: " + msg);
-    return true; 
-};
-window.prompt = function(msg, defaultText) {
-    window.alert("Prompt requested: " + msg);
-    return "Test Input Value"; 
-};
-</script>
-"""
-                    # 使用正则清理掉之前可能残留的、不完整的 window.alert 拦截脚本
-                    html_content = re.sub(r'<script>\s*window\.alert = function.*?<\/script>', '', html_content,
-                                          flags=re.DOTALL)
-
-                    # 重新将增强版的拦截脚本注入到 <head> 中
-                    html_content = html_content.replace("<head>", "<head>\n" + injection)
-                    with open(index_html_path, "w", encoding="utf-8") as f:
-                        f.write(html_content)
-            # =========================================================
-
-            # 启动前端服务器
-            print(f"   [系统] 启动 npm run dev...")
-            try:
-                from utils.execute_for_feedback import force_kill_port_3000
-
-                force_kill_port_3000()
-            except ImportError:
-                pass
+            print(f"   [系统] 启动 npm run dev (分配随机端口: {app_port})...")
 
             server_process = subprocess.Popen(
-                ["npm", "run", "dev"],
+                f"npm run dev -- --port {app_port}",
                 cwd=workspace_dir,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 shell=True
             )
-            time.sleep(5)  # 等待冷启动
 
+            # 备注：探活逻辑已被转移到 evaluate_with_webvoyager 内部
+            # 这里不需要再写冗长的 for 循环探测端口了，直接交给评测函数处理
+            time.sleep(2)
+
+            # ======================================================
             # 配置 WebVoyager 测试参数
             debug_log_dir = os.path.join(project_root, "experiment_results", "standalone_test_log", task_folder_name)
 
-            # 🧹 防止独立测试脚本的缓存干扰，先清空历史打分记录
             if os.path.exists(debug_log_dir):
                 shutil.rmtree(debug_log_dir, ignore_errors=True)
             os.makedirs(debug_log_dir, exist_ok=True)
@@ -300,59 +286,49 @@ window.prompt = function(msg, defaultText) {
                 "download_dir": os.path.join(debug_log_dir, "downloads"),
                 "window_width": 1200,
                 "window_height": 800,
-                "headless": False,
+                "headless": False,  # 确保这里是 False，从而在屏幕上显示浏览器
                 "text_only": False,
                 "fix_box_color": False,
                 "save_accessibility_tree": False,
-                "max_attached_imgs": 3,
+                "max_attached_imgs": 1,  # 强烈建议改成1，省钱省token
                 "max_iter": 10,
-                # ✅ 关键修正：确保使用支持视觉功能的评估模型！防止 Base64 引起 Token 爆炸死循环。
-                "api_model": "gpt-5-mini",
+                "api_model": "gpt-4o-mini",  # 修正为 gpt-4o-mini 或你 .env 里的模型
                 "seed": 42
+                # 由于这是独立测试，没有 run_simulation 的动态传参，底层会自动 fallback 读 .env 里的 KEY 和 URL
             }
 
-            print("   [系统] 正在进行 WebVoyager 打分...")
+            print("   [系统] 正在进行可视化的 WebVoyager 打分...")
             result = evaluate_with_webvoyager(
                 target_url=target_url,
                 user_instruction=test_user_instruction,
                 oracle_slots=test_oracle_slots,
                 task_id=task_folder_name,
-                args_dict=test_args_dict
+                args_dict=test_args_dict,
+                app_port=app_port  # 👈 必须把端口传进去，否则报 TypeError!
             )
 
-            # 动态判断并修复 JSON 状态
-            print("\n   [系统] 将打分结果写回 interaction_history.json...")
+            # 仅在终端打印结果，不再覆写 interaction_history.json
+            print("\n   [系统] 评估完成！(调试模式：结果不写入 interaction_history.json)")
 
-            # ✅ 修复之前强行设置为 SUCCESS 的 Bug
             final_status = "SUCCESS" if result["Success_Rate_SR"] == 1 else "FAIL"
 
-            last_turn["debug_info"]["evaluation_detail"] = {
-                "status": final_status,
-                "sr": result["Success_Rate_SR"],
-                "tcr": result["Task_Completion_Rate_TCR"],
-                "text": "Evaluation recovered via batch retest script.",
-                "raw_metrics": result["Details"]
-            }
-
-            with open(history_json_path, "w", encoding="utf-8") as f:
-                json.dump(history_data, f, indent=2, ensure_ascii=False)
-
             print(
-                f"   ✅ {task_folder_name} 修复完毕！当前状态已更新为: {final_status} | TCR: {result['Task_Completion_Rate_TCR']}")
+                f"    {task_folder_name} 评估结果: {final_status} | SR: {result['Success_Rate_SR']} | TCR: {result['Task_Completion_Rate_TCR']}")
+            print("    [指标详情]:")
+            for detail in result['Details']:
+                print(
+                    f"      - {detail['task']}: {'PASSED' if detail['passed'] else 'FAILED'} (Reason: {detail['reason']})")
 
         except Exception as e:
-            print(f"\n   ❌ 处理 {task_folder_name} 时发生严重错误: {e}")
+            print(f"\n    处理 {task_folder_name} 时发生严重错误: {e}")
 
         finally:
-            # 确保每轮结束强制关闭服务器，防止堆积
-            print("   [系统] 清理本轮服务器占用...")
+            print("   [系统] 清理本轮专属服务器占用...")
             try:
                 if server_process:
                     server_process.terminate()
-                from utils.execute_for_feedback import force_kill_port_3000
-
-                force_kill_port_3000()
+                    server_process.wait(timeout=3)
             except:
                 pass
 
-    print("\n🎉 所有任务批量处理结束！请重新运行全局分析脚本查看最新战报。")
+    print("\n 所有任务可视化测试结束！")

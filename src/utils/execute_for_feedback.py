@@ -72,13 +72,13 @@ def is_port_open(port, host='127.0.0.1'):
         return s.connect_ex((host, port)) == 0
 
 
-def force_kill_port_3000():
+def force_kill_port(port: int):
     try:
         if platform.system() == "Windows":
-            cmd = 'FOR /F "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a'
+            cmd = f'FOR /F "tokens=5" %a in (\'netstat -aon ^| findstr :{port}\') do taskkill /F /PID %a'
             subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            subprocess.run("lsof -ti:3000 | xargs kill -9", shell=True, stdout=subprocess.DEVNULL,
+            subprocess.run(f"lsof -ti:{port} | xargs kill -9", shell=True, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
     except Exception:
         pass
@@ -100,8 +100,8 @@ def run_commands(cmds, cwd):
     return results
 
 
-def start_background_service(start_cmd, cwd, log_file="service.log"):
-    force_kill_port_3000()
+def start_background_service(start_cmd, cwd, port, log_file="service.log"):  # 增加 port 参数
+    force_kill_port(port)  # 替换原来的 force_kill_port_3000
     time.sleep(0.5)
     log_path = Path(log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,10 +114,12 @@ def start_background_service(start_cmd, cwd, log_file="service.log"):
 
 # --- 核心 BrowserEnv ---
 class BrowserEnv:
-    def __init__(self, project_dir, log_dir, start_cmd="npm run dev"):
+    # 【修复 1】__init__ 增加 app_port，并保存到 self
+    def __init__(self, project_dir, log_dir, start_cmd="npm run dev", app_port=3000):
         self.project_dir = project_dir
         self.log_dir = log_dir
         self.start_cmd = start_cmd
+        self.app_port = app_port  # <--- 关键！保存传入的端口
         self.playwright = None
         self.browser = None
         self.context = None
@@ -126,28 +128,47 @@ class BrowserEnv:
         self.console_logs = []
 
     def start(self, target_path=None):
-        if not is_port_open(3000):
+        if not is_port_open(self.app_port):  # 使用动态端口
             log_file = os.path.join(self.log_dir, "service.log")
-            self.process, _ = start_background_service(self.start_cmd, self.project_dir, log_file)
-            print(f"Waiting for service to start (Log: {log_file})...")
+            self.process, _ = start_background_service(self.start_cmd, self.project_dir, self.app_port, log_file)
+            print(f"Waiting for service to start on port {self.app_port} (Log: {log_file})...")
             for _ in range(10):
-                if is_port_open(3000): break
+                if is_port_open(self.app_port): break  # 使用动态端口
                 time.sleep(1)
 
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
-        self.context = self.browser.new_context(viewport={'width': 1280, 'height': 800})
+        # 1. 对齐沙盒参数，防止在 Docker 或 Linux 环境下崩溃
+        self.browser = self.playwright.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        # 2. 对齐 WebVoyager 的分辨率 (1200x800)，确保坐标系绝对一致
+        self.context = self.browser.new_context(viewport={'width': 1200, 'height': 800})
         self.page = self.context.new_page()
+
+        # 3. 注入与 WebVoyager 完全一致的全局弹窗拦截器，防止死锁
+        def handle_dialog(dialog):
+            print(f"  > [Visual Copilot] Auto-accepted Dialog: {dialog.message}")
+            dialog.accept()
+
+        self.page.on("dialog", handle_dialog)
 
         self.page.on("console",
                      lambda msg: self.console_logs.append({"type": msg.type, "text": msg.text}) if msg.type in ["error",
                                                                                                                 "warning"] else None)
         self.page.on("pageerror", lambda exc: self.console_logs.append({"type": "exception", "text": str(exc)}))
 
-        base_url = "http://localhost:3000"
+        # 替换 base_url 中的 3000
+        base_url = f"http://localhost:{self.app_port}"
         url = f"{base_url}/{target_path.lstrip('/')}" if target_path else base_url
         print(f"  > [BrowserEnv] Probing: {url}")
-        self.page.goto(url, wait_until="networkidle", timeout=15000)
+
+        try:
+            # 优化等待机制：使用 domcontentloaded 替代 networkidle，防止因一直有后台轮询导致超时
+            self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            time.sleep(2)  # 给予前端框架（React/Vue）水合渲染的时间
+        except Exception as e:
+            print(f"  > [BrowserEnv] Load Timeout/Error: {e}")
 
     def get_console_logs(self):
         return [l for l in self.console_logs if l['type'] in ['error', 'exception']]
@@ -169,8 +190,8 @@ class BrowserEnv:
             if draw_som:
                 self.page.evaluate(
                     "var oldLabels = document.querySelectorAll('.som-label'); oldLabels.forEach(l => l.remove());")
-        except:
-            pass
+        except Exception as e:
+            print(f"  > [BrowserEnv] Capture Failed: {e}")
         return img_path
 
     def execute_action(self, action_str):
@@ -193,12 +214,14 @@ class BrowserEnv:
                 if x is not None and y is not None:
                     self.page.mouse.click(x, y)
                     return f"Clicked coordinate: ({int(x)}, {int(y)})"
+
                 text_match = re.search(r'Click\s*\["(.*?)"\]', action_str)
                 if text_match:
                     target_text = text_match.group(1)
                     locator = self.page.locator(f"text='{target_text}'").first
                     if locator.count() > 0:
-                        locator.click(timeout=3000)
+                        # 4. 强制点击：无视 z-index 遮挡层
+                        locator.click(timeout=3000, force=True)
                         return f"Clicked text: {target_text}"
                     return f"Action failed: Could not find '{target_text}'"
 
@@ -206,9 +229,13 @@ class BrowserEnv:
                 match_id = re.search(r"\[(\d+)\];\s*(.*)", action_str)
                 if match_id:
                     idx, text = match_id.group(1), match_id.group(2).strip()
-                    self.page.fill(f"[data-som-id='{idx}']", text, timeout=3000)
-                    self.page.keyboard.press("Enter")
-                    return f"Typed in [{idx}]"
+                    locator = self.page.locator(f"[data-som-id='{idx}']")
+                    if locator.count() > 0:
+                        # 强制清空并输入
+                        locator.fill(text, timeout=3000, force=True)
+                        self.page.keyboard.press("Enter")
+                        return f"Typed in [{idx}]"
+                    return f"Action failed: Could not find element [{idx}]"
 
             elif "Scroll" in action_str:
                 direction = 500 if "down" in action_str.lower() else -500
@@ -230,9 +257,9 @@ class BrowserEnv:
 
 
 # --- 核心改进：非阻断式环境反馈 ---
-def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="npm run dev", step_idx=None):
+def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="npm run dev", step_idx=None,
+                         app_port=3000):
     feedback = {"install_error": [], "start_results": "", "start_error": False, "screenshot_path": ""}
-
     # 1. 安装环境并嗅探
     install_res = run_commands(cmds, cwd=project_dir)
     for cmd, out in install_res:
@@ -241,8 +268,9 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
             # 截取最后一部分输出，保证模型能看到版本冲突的详情
             feedback["install_error"].append(f"Issue in '{cmd}':\n{out[-600:]}")
 
-    # 2. 尝试启动服务并探测（即便安装有警告，也尝试运行以获取视觉反馈）
-    env = BrowserEnv(project_dir, log_dir, start_cmd)
+    # 【修复 2】把 app_port 透传给 BrowserEnv!
+    env = BrowserEnv(project_dir, log_dir, start_cmd, app_port=app_port)
+
     try:
         env.start()
         logs = env.get_console_logs()
@@ -268,7 +296,7 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
                 log_tail = "Failed to read service.log"
 
         feedback["start_results"] = (
-            f"CRITICAL: Browser could not connect to localhost:3000.\n"
+            f"CRITICAL: Browser could not connect to localhost:{app_port}.\n"
             f"Technical Error: {str(e)}\n\n"
             f"--- BACKEND SERVICE LOG (Potential version issues inside) ---\n"
             f"{log_tail}\n"
@@ -279,12 +307,15 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
     return feedback
 
 
+# 【修复 3】为兼容函数的签名也加上 app_port=3000，并透传给 BrowserEnv
 def execute_for_webvoyager_feedback(instruction, project_dir, log_dir, vlm_model, model, cmds=["npm install"],
                                     start_cmd="npm run dev", step_idx=None, max_tokens=-1, max_completion_tokens=-1,
-                                    target_path=None):
+                                    target_path=None, app_port=3000):
     from .vlm_generation import vlm_generation, encode_image
     run_commands(cmds, cwd=project_dir)
-    env = BrowserEnv(project_dir, log_dir, start_cmd)
+
+    # 将 app_port 传给 BrowserEnv
+    env = BrowserEnv(project_dir, log_dir, start_cmd, app_port=app_port)
     trace, status, grade, suggestions = [], "unknown", 1.0, "Simulation failed."
 
     try:

@@ -17,7 +17,6 @@ from utils import (
     directory_to_dict,
     dict_to_directory,
     restore_from_last_step,
-    generate_gui_agent_instruction,
     current_timestamp
 )
 from utils.vlm_generation import vlm_generation, encode_image, compress_and_encode_image
@@ -32,7 +31,7 @@ Your Goal: Verify the implementation based on the **User Instruction** AND the *
 
 **User Instruction**: "{instruction}"
 
-**Developer's Self-Defined Criteria** (Specific features implemented in this step):
+**Developer's Self-Defined Criteria**: 
 {criteria}
 
 **Detailed Interaction History**:
@@ -42,24 +41,25 @@ Your Goal: Verify the implementation based on the **User Instruction** AND the *
 
 **Verification Strategies (CRITICAL)**:
 1. **Focus on Criteria**: Check specifically for the features mentioned in the Criteria.
-2. **EARLY STOP (FAIL FAST)**: Your purpose is to provide feedback to the developer. If a required element is missing, styling is wrong, or a feature fails, DO NOT keep trying or Waiting. IMMEDIATELY output `Action: Fail; [reason]` so the developer can fix it.
-3. **Avoid Repetition**: Remember your Interaction History. If an action didn't work previously, fail immediately. Do not test the same broken thing twice.
-4. Critical - Browser Logs: Review any provided "BROWSER CONSOLE ERRORS". If they are critical errors (e.g., Uncaught TypeError, API 404 Not Found) that directly block the UI functionality, output 'Fail'. However, you MUST ignore harmless warnings (e.g., React deprecation notices, unique key warnings) if the visual Criteria are successfully met.
+2. **AUTO-FILLED DIALOGS (NEW)**: Our testing framework instantly auto-fills native browser prompt dialogs in the background to prevent hanging. If you click an 'Add' or 'Create' button and a new item (e.g., 'Test Input Value') immediately appears on the page in the next step, consider the function **PASSED**. Do NOT fail the test just because you didn't see the input form.
+3. **EARLY STOP (FAIL FAST)**: If a required element is clearly missing, styling is wrong, or a feature fails, IMMEDIATELY output `Action: Fail; [reason]`.
+4. **Avoid Repetition**: If an action didn't work previously (check Interaction History), fail immediately.
+5. **Browser Logs**: Review "BROWSER CONSOLE ERRORS". Fail on critical errors (404, TypeError). Ignore harmless warnings (React keys, deprecations).
 
-**Available Actions** :
+**Available Actions**:
 - `Click ["exact text OR icon meaning"]`: For standard web elements.
 - `Click [x%, y%]`: For elements inside images/canvas.
 - `Type ["exact text"]; [text]`: Input test data.
-- `Type [x%, y%]; [text]`: Click coordinate to focus, then type.
+- `Type [x%, y%]; [text]`: Focus and type.
 - `PressKey ["key_name"]`: Press a keyboard key.
 - `Scroll [down/up]`: Check hidden areas.
-- `Wait`: Wait for loading ONLY if you expect a network delay.
-- `Finish`: ALL criteria are met perfectly and there are no bugs.
-- `Fail; [reason]`: Found a bug, console error, or criteria mismatch. STOP and feedback immediately!
+- `Wait`: Only if expecting a network delay.
+- `Finish`: ALL criteria are met perfectly.
+- `Fail; [reason]`: Found a bug or criteria mismatch. STOP and feedback!
 
-**Response Format**:
-Thought: [Analyze: 1. Is the criterion met? 2. Are there errors? 3. If failed, I must FAIL IMMEDIATELY.]
-Action: [One action command]
+**Response Format (STRICT)**:
+Thought: [Your analysis in a single paragraph. Mention if you detected an auto-filled result.]
+Action: [One action command from the list above]
 """
 # --- 死循环故障分析 Prompt ---
 FAILURE_ANALYSIS_PROMPT = """
@@ -83,6 +83,7 @@ Root Cause: [Detailed explanation]
 Category: [Visual_Stagnation / Logic_Paradox / Code_Error / Hallucination]
 """
 
+
 def remove_dir(directory):
     for _ in range(5):
         try:
@@ -92,10 +93,12 @@ def remove_dir(directory):
             time.sleep(5)
     return False
 
+
 class WebGenAgent:
     def __init__(self, model, vlm_model, fb_model, workspace_dir, log_dir, instruction, max_iter, overwrite,
                  error_limit, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, custom_system_prompt=None,
-                 difficulty="middle", max_simulation_steps=15):
+                 difficulty="middle", max_simulation_steps=15, app_port=3000):
+        self.app_port = app_port
         self.model = model
         self.vlm_model = vlm_model
         self.fb_model = fb_model
@@ -109,9 +112,6 @@ class WebGenAgent:
 
         base_prompt = custom_system_prompt if custom_system_prompt else system_prompt
 
-
-
-        # [核心修改]：补充了“多功能合并写入”的提示
         self.system_prompt = base_prompt + (
             "\n\n<IMPORTANT_CONSTRAINT>\n"
             "1. TESTABILITY: You MUST add descriptive `data-testid` attributes to all key interactive elements.\n"
@@ -148,14 +148,13 @@ class WebGenAgent:
 
         self.is_finished = False
         self.messages = [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": instruction}]
-        self.gui_instruction = generate_gui_agent_instruction(instruction, fb_model, -1, -1)
         self.step_idx = -1
         self.consecutive_failures = 0
         self.nodes = {}
 
         restored = restore_from_last_step(log_dir, workspace_dir, max_iter)
         if restored[0]:
-            self.messages, self.gui_instruction, self.step_idx, _, _, self.nodes = restored
+            self.messages, _, self.step_idx, _, _, self.nodes = restored
             if self.messages[-1].get("info", {}).get("is_finish", False):
                 self.is_finished = True
 
@@ -165,17 +164,14 @@ class WebGenAgent:
     def _get_context_summary(self):
         summary_lines = ["=== CONVERSATION HISTORY (Agent & User) ==="]
         latest_artifact = ""
-        past_audits = []  # 【新增 1】：专门用于收集过往的视觉检查报告
+        past_audits = []
 
-        # 使用 enumerate 获取索引，方便我们回头看“上一条消息”
         for i, msg in enumerate(self.messages):
             role = msg['role']
 
-            # 1. 过滤系统提示词
             if role == 'system':
                 continue
 
-            # 2. 健壮的文本提取
             raw_content = msg['content']
             if isinstance(raw_content, list):
                 text_parts = [item['text'] for item in raw_content if item.get('type') == 'text']
@@ -183,35 +179,26 @@ class WebGenAgent:
             else:
                 content = str(raw_content)
 
-            # 3. 提取 User Agent 对话（采用状态机/行为追溯法）
             if role == 'user':
-                # 【新增 2】：拦截视觉审计报告，将其存入记忆列表，并跳过普通对话处理
                 if "**Visual Process Audit**" in content:
                     clean_audit = content.replace("**Visual Process Audit**", "").strip()
                     past_audits.append(clean_audit)
                     continue
 
-                # 显式过滤执行报错，避免污染对话流
                 if "Execution Feedback:" in content:
                     continue
 
                 is_real_user = False
-
-                # 情况 A：这是整个交互的开端（初始需求 Instruction）
-                # 通常 messages[0] 是 system prompt，messages[1] 是初始指令
                 if i == 1:
                     is_real_user = True
-                # 情况 B：判断它的“上一句话”是不是大模型发出的 ask_user 提问
                 elif i > 0:
                     prev_msg = self.messages[i - 1]
                     if prev_msg['role'] == 'assistant' and '<boltAction type="ask_user"' in str(prev_msg['content']):
                         is_real_user = True
 
-                # 如果是真实用户，才加入摘要
                 if is_real_user:
                     summary_lines.append(f"[USER AGENT]:\n{content.strip()}\n")
 
-            # 4. 提取 Coding Agent 的对话与思考过程
             elif role == 'assistant':
                 if '<boltArtifact' in content:
                     parts = content.split('<boltArtifact')
@@ -225,15 +212,11 @@ class WebGenAgent:
                 else:
                     summary_lines.append(f"[CODING AGENT]:\n{content.strip()}\n")
 
-        # ==========================================================
-        # 【新增 3】：在代码状态之前，附加上所有历史测试结果
-        # ==========================================================
         if past_audits:
             summary_lines.append("\n=== PREVIOUS VISUAL AUDIT RESULTS (Do not repeat failed checks blindly) ===")
             for idx, audit in enumerate(past_audits):
                 summary_lines.append(f"[Audit Round {idx + 1}]:\n{audit}\n")
 
-        # 5. 附上最新代码
         if latest_artifact:
             summary_lines.append("\n=== LATEST CODE STATE (For Visual Verification) ===")
             summary_lines.append(latest_artifact)
@@ -247,7 +230,17 @@ class WebGenAgent:
 
         print(f"\033[95m[Agent]: Audit Goal -> {criteria[:100]}...\033[0m")
 
-        env = BrowserEnv(self.workspace_dir, self.log_dir)
+        # =========================================================================
+        # [核心修正] 确保内部视觉智能体启动 BrowserEnv 时传递动态端口和对应的命令
+        # =========================================================================
+        dynamic_start_cmd = f"npm run dev -- --port {self.app_port}"
+        env = BrowserEnv(
+            project_dir=self.workspace_dir,
+            log_dir=self.log_dir,
+            start_cmd=dynamic_start_cmd,
+            app_port=self.app_port
+        )
+
         trace = []
         status = "unknown"
         error_msg = ""
@@ -255,7 +248,7 @@ class WebGenAgent:
         context_summary = self._get_context_summary()
         step_idx = 0
 
-        import re  # 确保引入了正则库
+        import re
 
         try:
             env.start(target_path)
@@ -264,19 +257,16 @@ class WebGenAgent:
             while step_idx < self.max_visual_steps:
                 print(f"  > Audit Step {step_idx + 1}/{self.max_visual_steps}")
 
-                # 传入 draw_som=False，明确要求内部视觉验证阶段不要画框
                 img_path = env.capture_observation(step_idx, draw_som=False)
                 last_screenshot = img_path
                 b64_img = encode_image(img_path)
 
-                # 【护城河 1】防御性拦截：避免截图为空导致引发 API 400 Bad Request
                 if not b64_img or len(b64_img) < 100:
                     print("\033[91m[致命错误] 截图 Base64 过短或失败，拦截 VLM 调用！\033[0m")
                     status = "error"
                     error_msg = "Screenshot capture failed or image is corrupted."
                     break
 
-                # 获取当前步骤的控制台日志
                 console_logs = []
                 if hasattr(env, 'get_console_logs'):
                     console_logs = env.get_console_logs()
@@ -284,7 +274,6 @@ class WebGenAgent:
                 log_feedback = ""
                 if console_logs:
                     log_feedback = "\n [BROWSER CONSOLE ERRORS DETECTED]:\n"
-                    # 【护城河 2】日志净化：只提取真正的报错 (SEVERE/error)，屏蔽 React 黄字警告
                     has_real_error = False
                     for log in console_logs:
                         if log.get('level') in ['SEVERE', 'ERROR'] or log.get('type') == 'error':
@@ -293,7 +282,7 @@ class WebGenAgent:
                             has_real_error = True
 
                     if not has_real_error:
-                        log_feedback = ""  # 如果全是无用警告，就当没看见
+                        log_feedback = ""
                     else:
                         print(f"\033[91m{log_feedback}\033[0m")
 
@@ -320,10 +309,6 @@ class WebGenAgent:
                     ]
                 )
 
-                # ==========================================
-                # 【核心修改点】使用正则更健壮地同时提取 Thought 和 Action
-                # 这样即使大模型在 Thought 里换了行，也能完整抓取
-                # ==========================================
                 action = "Wait"
                 thought_process = "No specific thought process provided."
 
@@ -345,7 +330,6 @@ class WebGenAgent:
 
                 if "Fail" in action:
                     status = "failed"
-                    # 【核心修改点】将大模型的具体推理（Thought）组装进错误信息，反馈给 Coding Agent
                     error_msg = f"Visual Audit Failed: {action}\n[Visual Agent Observation]: {thought_process}"
                     break
 
@@ -363,9 +347,6 @@ class WebGenAgent:
         finally:
             env.close()
 
-        # =========================================================
-        # 核心逻辑：仅在失败或报错时，才附加当前步骤捕获到的控制台日志
-        # =========================================================
         raw_console_errors = ""
         if 'log_feedback' in locals() and log_feedback and status in ["failed", "error"]:
             raw_console_errors = f"\n\n--- BROWSER CONSOLE LOGS (For Debugging) ---\n{log_feedback}"
@@ -396,18 +377,17 @@ class WebGenAgent:
         output = llm_generation(concise_messages, self.model, max_tokens=self.max_tokens,
                                 max_completion_tokens=self.max_completion_tokens, temperature=self.temperature)
 
-        # 1. Ask User (明确的提问标签)
+        # 1. Ask User
         if re.search(r'<boltAction\s+type\s*=\s*["\']ask_user["\'].*?>', output, re.DOTALL | re.IGNORECASE):
             match = re.search(r'<boltAction\s+type\s*=\s*["\']ask_user["\'].*?>(.*?)(?:</boltAction>|$)', output,
                               re.DOTALL | re.IGNORECASE)
             question = match.group(1).strip() if match else output
 
-            # 为 Assistant 创建独立的 info
             info_assistant = {"is_question": True}
             self.messages.append({"role": "assistant", "content": output, "info": info_assistant})
             return {"type": "question", "content": question, "is_finish": False}, False
 
-        # 2. Finish (明确的结束标签)
+        # 2. Finish
         elif re.search(r'<boltAction\s+type\s*=\s*["\']finish["\'].*?>', output, re.DOTALL | re.IGNORECASE):
             extract_and_write_files(output, self.workspace_dir)
 
@@ -416,7 +396,7 @@ class WebGenAgent:
             return {"type": "submitted" if simulation_mode else "finish", "content": output,
                     "is_finish": not simulation_mode}, False
 
-        # 3. Visual Verification (明确的视觉测试标签)
+        # 3. Visual Verification
         elif re.search(r'<boltAction\s+type\s*=\s*["\']screenshot_validated["\'].*?>', output,
                        re.DOTALL | re.IGNORECASE):
 
@@ -440,7 +420,6 @@ class WebGenAgent:
             feedback_str, failed, last_screenshot_path, detailed_trace = self._run_autonomous_test(target_path,
                                                                                                    criteria=criteria_text)
 
-            # 为 User 视觉反馈创建完全独立的 info
             info_user = {"internal_test_trace": detailed_trace}
 
             if failed:
@@ -475,9 +454,15 @@ class WebGenAgent:
             self.messages.append({"role": "assistant", "content": output, "info": info_assistant})
 
             extract_and_write_files(output, self.workspace_dir)
-            f_dict = execute_for_feedback(self.workspace_dir, self.log_dir)
 
-            # 为 User 执行反馈创建完全独立的 info
+            dynamic_start_cmd = f"npm run dev -- --port {self.app_port}"
+            f_dict = execute_for_feedback(
+                self.workspace_dir,
+                self.log_dir,
+                start_cmd=dynamic_start_cmd,
+                app_port=self.app_port
+            )
+
             info_user = {"environment_feedback": f_dict}
 
             fb = "Execution Feedback:\n"
@@ -512,7 +497,6 @@ class WebGenAgent:
         current_workspace = directory_to_dict(self.workspace_dir)
         existing_snapshots[f"step_{i}"] = current_workspace
 
-        # 保存时，self.messages 已经包含了所有 turn 的 info 信息
         data = {
             "messages": self.messages,
             "nodes": self.nodes,
