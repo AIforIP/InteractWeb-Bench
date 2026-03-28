@@ -14,7 +14,7 @@ echo "Starting vLLM Node 1 on port: $TARGET_PORT"
 
 fuser -k ${TARGET_PORT}/tcp >/dev/null 2>&1
 
-MODEL_PATH="/home/hhr/home/hhr/models/Qwen3-VL-2B-Thinking"
+MODEL_PATH="/home/hhr/home/models/Qwen3-VL-2B-Thinking"
 
 python -m vllm.entrypoints.openai.api_server \
     --model $MODEL_PATH \

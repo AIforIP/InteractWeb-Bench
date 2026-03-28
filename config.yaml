@@ -1,5 +1,5 @@
 # 数据路径配置
-data_path: "/app/data/test_mini.jsonl"
+data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
 
 # 模型选择配置
 models:
