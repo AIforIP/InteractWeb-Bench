@@ -205,7 +205,6 @@ console.log(factorial(5));</boltAction>
 export default defineConfig({
   server: {
     host: '0.0.0.0',
-    port: 3000
   }
 })</boltAction>
         <boltAction type="file" filePath="index.html">&lt;!DOCTYPE html&gt;
