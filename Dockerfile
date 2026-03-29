@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip install --upgrade pip
+
 # 5. 复制依赖清单并安装 Python 库
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
