@@ -9,6 +9,7 @@ import socket
 import concurrent.futures
 from contextlib import closing
 from dotenv import load_dotenv
+from tqdm import tqdm  # 引入进度条库
 
 # 将 src 加入路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -63,23 +64,23 @@ def get_vlm_endpoint(model_name: str) -> str:
                 routes[k.strip()] = v.strip()
 
     if model_name in routes:
-        print(f"   [路由] 模型 {model_name} 匹配到本地节点: {routes[model_name]}")
+        tqdm.write(f"   [路由] 模型 {model_name} 匹配到本地节点: {routes[model_name]}")
         return routes[model_name]
     else:
         fallback_url = os.environ.get("OPENAILIKE_VLM_BASE_URL", "https://api.chatanywhere.tech/v1")
-        print(f"   [路由] 模型 {model_name} 走云端默认节点: {fallback_url}")
+        tqdm.write(f"   [路由] 模型 {model_name} 走云端默认节点: {fallback_url}")
         return fallback_url
 
 
 # ==============================================================================
 #  数据持久化逻辑
 # ==============================================================================
-def save_interaction_history(messages, output_file, violating_chitchat_count):
+def save_interaction_history(messages, output_file, format_error_count):
     history = []
     stats = {
         "PATH_A_CLARIFY": 0, "PATH_B_IMPLEMENT": 0,
         "PATH_C_VERIFY": 0, "PATH_D_SUBMIT": 0,
-        "VIOLATING_CHITCHAT_COUNT": violating_chitchat_count
+        "FORMAT_ERROR_COUNT": format_error_count
     }
 
     for i, msg in enumerate(messages):
@@ -109,12 +110,12 @@ def save_interaction_history(messages, output_file, violating_chitchat_count):
 # ==============================================================================
 def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_slots, user_instruction, task_id, args,
                              app_port, stop_reason="submitted"):
-    print(f"\n[系统] 正在执行最终评估 (任务: {task_id}, 端口: {app_port}, 原因: {stop_reason})...")
+    tqdm.write(f"\n[系统] 正在执行最终评估 (任务: {task_id}, 端口: {app_port}, 原因: {stop_reason})...")
 
     if not oracle_slots:
-        print("\033[91m[警告] 传入的 oracle_slots 为空！本次评估注定为 0 分。\033[0m")
+        tqdm.write("\033[91m[警告] 传入的 oracle_slots 为空！本次评估注定为 0 分。\033[0m")
     else:
-        print(f"   [系统] 成功加载 {len(oracle_slots)} 项打分标准，准备启动 WebVoyager 验收。")
+        tqdm.write(f"   [系统] 成功加载 {len(oracle_slots)} 项打分标准，准备启动 WebVoyager 验收。")
 
     # 动态构建启动命令并将端口传给探活机制
     dynamic_start_cmd = f"npm run dev -- --port {app_port}"
@@ -133,7 +134,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             "raw_metrics": {"Total_Weight": 0.0, "Details": []}
         }
     else:
-        print(f"   [系统] 正在启动前端服务器 (指定端口: {app_port})...")
+        tqdm.write(f"   [系统] 正在启动前端服务器 (指定端口: {app_port})...")
 
         # 动态绑定端口启动前端 (适应 Vite/CRA 等框架)
         server_process = subprocess.Popen(
@@ -145,14 +146,14 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
         )
 
         # 智能探活
-        print(f"   [系统] 等待 localhost:{app_port} 端口就绪...")
+        tqdm.write(f"   [系统] 等待 localhost:{app_port} 端口就绪...")
         for _ in range(30):
             if is_port_open(app_port):
-                print(f"   [系统] 端口 {app_port} 已连通！")
+                tqdm.write(f"   [系统] 端口 {app_port} 已连通！")
                 break
             time.sleep(1)
         else:
-            print(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。\033[0m")
+            tqdm.write(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。\033[0m")
 
         try:
             eval_log_dir = os.path.join(log_dir, "eval_webvoyager")
@@ -186,7 +187,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
                 "seed": 42
             }
 
-            print(f"   [系统] WebVoyager 代理已切入 (模型: {target_model} | 节点: {assigned_vlm_url})...")
+            tqdm.write(f"   [系统] WebVoyager 代理已切入 (模型: {target_model} | 节点: {assigned_vlm_url})...")
 
             # 动态拼接 target_url 传给 WebVoyager
             target_url = f"http://localhost:{app_port}/"
@@ -208,7 +209,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             }
 
         except Exception as e:
-            print(f"\033[91m[错误] WebVoyager 评估过程中发生异常: {e}\033[0m")
+            tqdm.write(f"\033[91m[错误] WebVoyager 评估过程中发生异常: {e}\033[0m")
             eval_result = {
                 "status": "ERROR", "sr": 0, "tcr": 0.0,
                 "text": f"Evaluation Error: {str(e)}",
@@ -223,7 +224,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
                 except Exception:
                     server_process.kill()
 
-    print(f"   => Final TCR: {eval_result.get('tcr', 0.0) * 100:.1f}% | Status: {eval_result.get('status')}")
+    tqdm.write(f"   => Final TCR: {eval_result.get('tcr', 0.0) * 100:.1f}% | Status: {eval_result.get('status')}")
 
     builder.messages.append({
         "role": "user",
@@ -253,27 +254,40 @@ def run_single_task(task, args):
     max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 20)
     error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 5)
 
-    # 1. 先计算当前任务的输出路径
     safe_model_name = args.builder_model.replace("/", "-").replace(":", "-")
     workspace_dir = os.path.join(args.output_dir, safe_model_name, "workspaces", task_id)
     log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
 
     # =========================================================================
-    # 2. 样例级断点续跑：如果该样例的最终记录文件已存在且未开启覆盖，直接跳过
+    # 2. 样例级断点续跑：深度校验是否真实完成了打分 (以 is_final: True 为唯一准则)
     # =========================================================================
     interaction_history_path = os.path.join(log_dir, "interaction_history.json")
     if not args.overwrite and os.path.exists(interaction_history_path):
-        print(f"[断点续跑] 任务 {task_id} 已有完整记录，自动跳过。")
-        return task_id
+        try:
+            with open(interaction_history_path, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
 
-    # 3. 只有确认需要跑该任务时，才动态分配端口并打印启动信息
+            trajectory = history_data.get("trajectory", [])
+            if trajectory:
+                last_turn = trajectory[-1]
+                debug_info = last_turn.get("debug_info", {})
+
+                if debug_info.get("is_final") is True:
+                    eval_detail = debug_info.get("evaluation_detail", {})
+                    status = eval_detail.get("status", "UNKNOWN")
+                    tqdm.write(f"[断点续跑] 任务 {task_id} 已有完整打分记录 (Status: {status})，自动跳过。")
+                    return task_id
+                else:
+                    tqdm.write(f"[断点续跑] 任务 {task_id} 历史记录未包含最终打分阶段 (中途异常中断)，将重新执行。")
+            else:
+                tqdm.write(f"[断点续跑] 任务 {task_id} 历史轨迹为空，将重新执行。")
+        except Exception as e:
+            tqdm.write(f"[断点续跑] 读取任务 {task_id} 历史记录失败 ({e})，将重新执行。")
+
+    # 3. 动态分配端口并打印启动信息
     app_port = find_free_port()
-    print(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
+    tqdm.write(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
 
-    # (这下面紧接着是你原来的 WebGenAgent 实例化代码，保持不变即可)
-    # builder = WebGenAgent(
-    # ...
-    # WebGenAgent 内部测试时使用分配的端口
     builder = WebGenAgent(
         model=args.builder_model,
         vlm_model=args.visual_copilot_model,
@@ -299,38 +313,30 @@ def run_single_task(task, args):
     turn_counter = 0
     loop_idx = 0
     is_graded = False
-    total_violating_chitchat = 0
 
     while turn_counter < max_turns:
-        print(f"\n--- Task {task_id} | Turn {turn_counter + 1}/{max_turns} ---")
+        tqdm.write(f"\n--- Task {task_id} | Turn {turn_counter + 1}/{max_turns} ---")
 
         action, is_failed = builder.step(loop_idx, simulation_mode=True)
         builder.save_history(loop_idx)
         loop_idx += 1
 
-        raw_output = builder.messages[-1]["content"] if builder.messages else ""
-
+        # ==== 修复后的路由分发逻辑 ====
         if action["type"] == "question":
-            has_valid_tag = any(tag in raw_output for tag in ["<boltAction", "<boltArtifact"])
-
-            if not has_valid_tag:
-                total_violating_chitchat += 1
-                if total_violating_chitchat >= 10:
-                    is_graded = False
-                    break
-                system_feedback = "SYSTEM ALERT: Invalid format. You MUST use `<boltArtifact>` or `<boltAction>` tags."
-                builder.messages.append({"role": "user", "content": system_feedback})
-                continue
-
+            # 正常提问，交给用户模拟器回答
             answer = user_sim.answer_question(action["content"])
             builder.messages.append({"role": "user", "content": answer})
             turn_counter += 1
             continue
 
-        if action["type"] in ["coding", "internal_test"]:
+        elif action["type"] in ["coding", "internal_test", "shell", "format_error"]:
             if builder.is_finished: break
-            turn_counter += 1
+
+            # format_error 是底层强制打回重写，不算作消耗有效沟通轮数
+            if action["type"] != "format_error":
+                turn_counter += 1
             continue
+
         elif action["type"] == "submitted":
             perform_final_evaluation(
                 builder, user_sim, workspace_dir, log_dir,
@@ -338,7 +344,7 @@ def run_single_task(task, args):
                 user_instruction=ground_truth,
                 task_id=task_id,
                 args=args,
-                app_port=app_port,  # 传入独立的端口
+                app_port=app_port,
                 stop_reason="submitted"
             )
             is_graded = True
@@ -352,14 +358,16 @@ def run_single_task(task, args):
             user_instruction=user_instruction,
             task_id=task_id,
             args=args,
-            app_port=app_port,  # 传入独立的端口
+            app_port=app_port,
             stop_reason=reason
         )
 
+    # 提取在底层统计到的格式错误次数保存
+    format_errors = getattr(builder, 'format_error_count', 0)
     save_interaction_history(
         builder.messages,
         os.path.join(log_dir, "interaction_history.json"),
-        total_violating_chitchat
+        format_errors
     )
     return task_id
 
@@ -368,13 +376,10 @@ def run_single_task(task, args):
 #  主入口：并发控制
 # ==============================================================================
 def main():
-    import yaml  # 引入 yaml 解析库
+    import yaml
 
     parser = argparse.ArgumentParser()
-    # 1. 新增 --config 参数
     parser.add_argument("--config", type=str, help="YAML配置文件的路径")
-
-    # 2. 保留原有的参数作为默认值（如果配置文件没写，就用这些）
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH)
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--builder_model", type=str, default="gpt-4.1")
@@ -386,7 +391,6 @@ def main():
 
     args = parser.parse_args()
 
-    # 3. 如果传入了 --config，则读取 YAML 并覆盖 args 中的属性
     if args.config:
         if not os.path.exists(args.config):
             print(f"❌ 错误: 找不到配置文件 {args.config}")
@@ -396,7 +400,6 @@ def main():
             config_data = yaml.safe_load(f)
 
         if config_data:
-            # 覆盖顶层配置
             if "data_path" in config_data:
                 args.data_path = config_data["data_path"]
             if "output_dir" in config_data:
@@ -404,7 +407,6 @@ def main():
             if "max_workers" in config_data:
                 args.max_workers = config_data["max_workers"]
 
-            # 覆盖嵌套的 models 配置
             if "models" in config_data:
                 models_cfg = config_data["models"]
                 if "builder_model" in models_cfg:
@@ -416,7 +418,6 @@ def main():
                 if "user_model" in models_cfg:
                     args.user_model = models_cfg["user_model"]
 
-    # 4. 校验最终的数据路径
     if not os.path.exists(args.data_path):
         print(f"❌ 错误: 找不到数据文件 {args.data_path}")
         return
@@ -431,18 +432,23 @@ def main():
     print(f" User 模型: {args.user_model}")
     print(f" WebVoyager 模型: {args.webvoyager_model}")
 
-    # 使用 ProcessPoolExecutor 进行并发
+    # 使用 tqdm 包装 concurrent.futures 的执行过程
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as executor:
         futures = []
         for task in tasks:
             futures.append(executor.submit(run_single_task, task, args))
 
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                finished_task_id = future.result()
-                print(f"✅ 任务 {finished_task_id} 整体流程执行完毕。")
-            except Exception as e:
-                print(f"❌ 任务执行期间发生未捕获异常: {e}")
+        # 进度条展示，total 是任务总数
+        with tqdm(total=len(tasks), desc="Processing Tasks", unit="task") as pbar:
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    finished_task_id = future.result()
+                    # 使用 tqdm.write 替代 print，防止多线程打印冲刷掉进度条
+                    tqdm.write(f"✅ 任务 {finished_task_id} 整体流程执行完毕。")
+                except Exception as e:
+                    tqdm.write(f"❌ 任务执行期间发生未捕获异常: {e}")
+                finally:
+                    pbar.update(1)  # 任务完成（无论成功失败），进度条 +1
 
 
 if __name__ == "__main__":

@@ -150,6 +150,7 @@ class WebGenAgent:
         self.messages = [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": instruction}]
         self.step_idx = -1
         self.consecutive_failures = 0
+        self.format_error_count = 0  # 增加全局格式违规计数器
         self.nodes = {}
 
         restored = restore_from_last_step(log_dir, workspace_dir, max_iter)
@@ -230,9 +231,6 @@ class WebGenAgent:
 
         print(f"\033[95m[Agent]: Audit Goal -> {criteria[:100]}...\033[0m")
 
-        # =========================================================================
-        # [核心修正] 确保内部视觉智能体启动 BrowserEnv 时传递动态端口和对应的命令
-        # =========================================================================
         dynamic_start_cmd = f"npm run dev -- --port {self.app_port}"
         env = BrowserEnv(
             project_dir=self.workspace_dir,
@@ -475,15 +473,39 @@ class WebGenAgent:
             self.messages.append({"role": "user", "content": fb, "info": info_user})
             return {"type": "coding", "content": output, "is_finish": False}, False
 
-        # 5. Fallback
+        # 5. Fallback (格式违规兜底纠错)
         else:
-            info_assistant = {"is_question": True}
+            self.format_error_count += 1
+            info_assistant = {"is_format_error": True}
             self.messages.append({"role": "assistant", "content": output, "info": info_assistant})
-            return {"type": "question", "content": output, "is_finish": False}, False
+
+            print(
+                f"\033[93m[Warn] LLM Format Error (Total: {self.format_error_count}). Requesting regeneration...\033[0m")
+
+            # 向模型发送强约束纠错提示
+            correction_msg = (
+                "SYSTEM WARNING: Your previous output did not match any expected action path. "
+                "You MUST choose exactly ONE path (A, B, C, or D). "
+                "If you are attempting to write code or run shell commands (like npm install), "
+                "you MUST wrap them STRICTLY inside opening `<boltArtifact>` and closing `</boltArtifact>` tags. "
+                "Do NOT output bare `<boltAction>` tags outside of an artifact. "
+                "Please evaluate the situation and generate your response again using the correct format."
+            )
+
+            info_user = {"is_correction": True}
+            self.messages.append({"role": "user", "content": correction_msg, "info": info_user})
+
+            return {"type": "format_error", "content": output, "is_finish": False}, True
 
     def save_history(self, i, pre=None, has_error=False):
         output_file = os.path.join(self.log_dir, "history.json")
-        self.nodes[f"step{i}.json"] = {"has_error": has_error, "pre": pre}
+
+        # 将累计格式错误次数保存进历史节点数据中
+        self.nodes[f"step{i}.json"] = {
+            "has_error": has_error,
+            "pre": pre,
+            "format_errors_up_to_now": getattr(self, 'format_error_count', 0)
+        }
 
         existing_snapshots = {}
         if os.path.exists(output_file):

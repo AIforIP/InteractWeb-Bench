@@ -7,7 +7,7 @@ output_dir: "/home/hhr/home/store/experiment_results"
 #output_dir: "/app/experiment_results"
 # 模型选择配置
 models:
-  builder_model: "Qwen3-VL-2B-Thinking"
-  visual_copilot_model: "Qwen3-VL-2B-Thinking"
+  builder_model: "gpt-4.1"
+  visual_copilot_model: "gpt-4.1"
   webvoyager_model: "gpt-5-mini"
   user_model: "deepseek-v3.2"
