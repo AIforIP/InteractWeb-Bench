@@ -1,6 +1,6 @@
 # 数据路径配置
 data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
-
+output_dir: "/home/hhr/home/store/experiment_results"
 # 模型选择配置
 models:
   builder_model: "Qwen3-VL-2B-Thinking"

@@ -17,7 +17,7 @@ if not api_key:
     raise ValueError("API Key not found! Please set OPENAILIKE_API_KEY or OPENAI_API_KEY in .env")
 
 # 使用 httpx 自定义客户端，增加超时时间和底层重试
-robust_timeout = 300
+robust_timeout = 900
 robust_transport = httpx.HTTPTransport(retries=3)
 
 http_client = httpx.Client(

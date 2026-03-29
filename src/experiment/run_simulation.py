@@ -253,15 +253,26 @@ def run_single_task(task, args):
     max_turns = MAX_TURNS_MAPPING.get(difficulty.lower(), 20)
     error_limit = ERROR_LIMIT_MAPPING.get(difficulty.lower(), 5)
 
-    # 动态分配当前任务的独立端口
-    app_port = find_free_port()
-
-    print(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
-
+    # 1. 先计算当前任务的输出路径
     safe_model_name = args.builder_model.replace("/", "-").replace(":", "-")
     workspace_dir = os.path.join(args.output_dir, safe_model_name, "workspaces", task_id)
     log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
 
+    # =========================================================================
+    # 2. 样例级断点续跑：如果该样例的最终记录文件已存在且未开启覆盖，直接跳过
+    # =========================================================================
+    interaction_history_path = os.path.join(log_dir, "interaction_history.json")
+    if not args.overwrite and os.path.exists(interaction_history_path):
+        print(f"[断点续跑] 任务 {task_id} 已有完整记录，自动跳过。")
+        return task_id
+
+    # 3. 只有确认需要跑该任务时，才动态分配端口并打印启动信息
+    app_port = find_free_port()
+    print(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
+
+    # (这下面紧接着是你原来的 WebGenAgent 实例化代码，保持不变即可)
+    # builder = WebGenAgent(
+    # ...
     # WebGenAgent 内部测试时使用分配的端口
     builder = WebGenAgent(
         model=args.builder_model,

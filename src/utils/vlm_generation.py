@@ -16,7 +16,7 @@ load_dotenv()
 # ── 配置更加健壮的 HTTP 客户端 (核心修复点) ──────────────────────────────────────
 # 1. 增加 timeout 和 底层 transport 重试
 robust_transport = httpx.HTTPTransport(retries=3)
-robust_timeout = 60.0
+robust_timeout = 900.0
 
 # 2. 初始化 OpenAI 客户端 (带重试)
 openai_base_url = os.environ.get("OPENAILIKE_VLM_BASE_URL") or os.environ.get("OPENAILIKE_BASE_URL") or os.environ.get(
