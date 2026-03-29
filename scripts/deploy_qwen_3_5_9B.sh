@@ -8,7 +8,7 @@ elif [ -f .env ]; then
 fi
 
 # 该脚本作为节点 1 启动，读取 NODE_1 的端口
-TARGET_PORT=${LOCAL_NODE_1_PORT:-8024}
+TARGET_PORT=${LOCAL_NODE_2_PORT:-8025}
 
 echo "Starting vLLM Node 1 on port: $TARGET_PORT"
 
@@ -22,8 +22,7 @@ python -m vllm.entrypoints.openai.api_server \
     --port $TARGET_PORT \
     --host 0.0.0.0 \
     --trust-remote-code \
-    --dtype bfloat16 \
     --max-model-len 128000 \
     --limit-mm-per-prompt '{"image": 5}' \
-    --gpu-memory-utilization 0.7 \
+    --gpu-memory-utilization 0.85 \
     --enforce-eager
