@@ -179,7 +179,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
                 "text_only": False,
                 "fix_box_color": False,
                 "save_accessibility_tree": False,
-                "max_attached_imgs": 1,  # 极限控制 Token
+                "max_attached_imgs": 3,  # 极限控制 Token
                 "max_iter": 16,
                 "api_model": target_model,
                 "vlm_base_url": assigned_vlm_url,  # 动态路由注入
@@ -332,9 +332,7 @@ def run_single_task(task, args):
         elif action["type"] in ["coding", "internal_test", "shell", "format_error"]:
             if builder.is_finished: break
 
-            # format_error 是底层强制打回重写，不算作消耗有效沟通轮数
-            if action["type"] != "format_error":
-                turn_counter += 1
+            turn_counter += 1
             continue
 
         elif action["type"] == "submitted":
