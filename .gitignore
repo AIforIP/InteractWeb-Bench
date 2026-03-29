@@ -13,6 +13,7 @@ src/data_generation/
 src/experiment_results/
 src/standalone_visual_logs/
 src/node_modules/
-src/__pycache__/
 
-__pycache__
+# Python cache
+__pycache__/
+**/__pycache__/
