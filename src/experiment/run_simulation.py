@@ -134,26 +134,44 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             "raw_metrics": {"Total_Weight": 0.0, "Details": []}
         }
     else:
+        # ==== 核心修改点：强力环境变量注入与崩溃日志收集 ====
+        current_env = os.environ.copy()
+        current_env["PORT"] = str(app_port)  # 兼容 CRA 等框架
+        current_env["VITE_PORT"] = str(app_port)  # 强制 Vite 端口
+        current_env["HOST"] = "0.0.0.0"  # 强制开放监听
+
         tqdm.write(f"   [系统] 正在启动前端服务器 (指定端口: {app_port})...")
 
-        # 动态绑定端口启动前端 (适应 Vite/CRA 等框架)
+        server_log_path = os.path.join(log_dir, "frontend_server.log")
+        server_log_file = open(server_log_path, "w", encoding="utf-8")
+
         server_process = subprocess.Popen(
             dynamic_start_cmd,
             cwd=workspace_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            env=current_env,  # <--- 注入环境变量
+            stdout=server_log_file,  # <--- 日志落盘
+            stderr=subprocess.STDOUT,
             shell=True
         )
 
-        # 智能探活
+        # 智能探活 (带防呆检查)
         tqdm.write(f"   [系统] 等待 localhost:{app_port} 端口就绪...")
+        port_ready = False
         for _ in range(30):
+            # 检查进程是否秒崩
+            if server_process.poll() is not None:
+                tqdm.write(f"\033[91m   [致命错误] 前端服务器已意外崩溃！详情请查看: {server_log_path}\033[0m")
+                break
+
             if is_port_open(app_port):
                 tqdm.write(f"   [系统] 端口 {app_port} 已连通！")
+                port_ready = True
                 break
             time.sleep(1)
-        else:
-            tqdm.write(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。\033[0m")
+
+        if not port_ready:
+            tqdm.write(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。原因请查阅 {server_log_path}\033[0m")
+        # ======================================================
 
         try:
             eval_log_dir = os.path.join(log_dir, "eval_webvoyager")
@@ -321,7 +339,6 @@ def run_single_task(task, args):
         builder.save_history(loop_idx)
         loop_idx += 1
 
-        # ==== 修复后的路由分发逻辑 ====
         if action["type"] == "question":
             # 正常提问，交给用户模拟器回答
             answer = user_sim.answer_question(action["content"])
@@ -329,7 +346,7 @@ def run_single_task(task, args):
             turn_counter += 1
             continue
 
-        elif action["type"] in ["coding", "internal_test", "shell", "format_error"]:
+        elif action["type"] in ["coding", "internal_test", "format_error"]:
             if builder.is_finished: break
 
             turn_counter += 1
