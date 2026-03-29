@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import json
+import time
 import argparse
 # 在脚本顶部添加：
 from utils.execute_for_feedback import is_port_open
@@ -198,9 +199,9 @@ if __name__ == "__main__":
 
     print("\n 开始独立测试任务 (屏幕可视化模式 / 结果不写入轨迹)...")
 
-    RETEST_JSONL_PATH = r"E:\Agent_work\src\data_generation\re_test1.jsonl"
-    LOGS_ROOT_DIR = r"E:\Agent_work\src\experiment_results\gpt-4o-mini\logs"
-    WORKSPACES_ROOT_DIR = r"E:\Agent_work\src\experiment_results\gpt-4o-mini\workspaces"
+    RETEST_JSONL_PATH = r"/app/data/test_mini.jsonl"
+    LOGS_ROOT_DIR = r"/app/experiment_results/Qwen3.5-9B/logs"
+    WORKSPACES_ROOT_DIR = r"/app/experiment_results/Qwen3.5-9B/workspaces"
 
     if not os.path.exists(RETEST_JSONL_PATH):
         print(f" 找不到待修复文件列表: {RETEST_JSONL_PATH}")
@@ -290,9 +291,9 @@ if __name__ == "__main__":
                 "text_only": False,
                 "fix_box_color": False,
                 "save_accessibility_tree": False,
-                "max_attached_imgs": 1,  # 强烈建议改成1，省钱省token
+                "max_attached_imgs": 3,  # 强烈建议改成1，省钱省token
                 "max_iter": 10,
-                "api_model": "gpt-4o-mini",  # 修正为 gpt-4o-mini 或你 .env 里的模型
+                "api_model": "gpt-5-mini",  # 修正为 gpt-4o-mini 或你 .env 里的模型
                 "seed": 42
                 # 由于这是独立测试，没有 run_simulation 的动态传参，底层会自动 fallback 读 .env 里的 KEY 和 URL
             }
