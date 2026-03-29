@@ -28,4 +28,4 @@ RUN playwright install chromium --with-deps
 COPY . .
 
 # 8. 默认启动命令
-CMD ["python", "src/experiment/run_simulation.py"]
+CMD ["python", "src/experiment/run_simulation.py", "--config", "/app/config.yaml"]
