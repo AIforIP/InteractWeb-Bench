@@ -267,7 +267,7 @@ class BrowserEnv:
 
 
 # ==============================================================================
-#  核心改进：无硬编码端口反馈收集
+#  核心改进：无硬编码端口反馈收集 + 注入后台日志
 # ==============================================================================
 def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="npm run dev", step_idx=None):
     feedback = {"install_error": [], "start_results": "", "start_error": False, "screenshot_path": ""}
@@ -285,8 +285,23 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
         logs = env.get_console_logs()
         if env.is_page_empty() or logs:
             feedback["start_error"] = True
-            feedback[
-                "start_results"] = f"Runtime Issue! Empty Page: {env.is_page_empty()}, Console Logs: {json.dumps(logs)}"
+
+            # 🌟 核心补丁：主动读取 Vite 后台编译日志（最后30行）
+            log_tail = ""
+            log_path = os.path.join(log_dir, "service.log")
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        log_tail = "".join(f.readlines()[-30:])
+                except:
+                    log_tail = "Failed to read service.log"
+
+            # 将后台日志拼接到 start_results 中，送给大模型进行排错
+            feedback["start_results"] = (
+                f"Runtime Issue! Empty Page: {env.is_page_empty()}, Console Logs: {json.dumps(logs)}\n\n"
+                f"--- BACKEND SERVICE LOG (Crucial for fixing compilation errors) ---\n"
+                f"{log_tail}\n"
+            )
         else:
             feedback["start_results"] = "Success"
             if step_idx is not None:

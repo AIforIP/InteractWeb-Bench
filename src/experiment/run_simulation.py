@@ -3,7 +3,9 @@ import os
 import json
 import sys
 import shutil
+import socket
 import concurrent.futures
+from contextlib import closing
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from tqdm import tqdm  # 引入进度条库
@@ -42,6 +44,14 @@ MAX_SIMULATION_STEPS = 8
 # ==============================================================================
 #  基础工具函数
 # ==============================================================================
+def find_free_port():
+    """向操作系统借一个绝对空闲的随机端口，用作 Vite 的首选起点"""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
 def get_vlm_endpoint(model_name: str) -> str:
     """
     解析 .env 中的 LOCAL_MODELS_MAP，根据模型名动态返回对应的 API URL。
@@ -108,8 +118,9 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
     else:
         tqdm.write(f"   [系统] 成功加载 {len(oracle_slots)} 项打分标准，准备启动 WebVoyager 验收。")
 
-    # 去掉强加的端口参数，让环境自然启动
-    dynamic_start_cmd = "npm run dev"
+    # 🌟 核心修改点：动态分配一个随机首选端口，避免并发任务全部去挤 5173
+    preferred_port = find_free_port()
+    dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
 
     # 第一次探活：仅仅确认代码本身能否跑起来，收集编译错误日志等
     env_info = execute_for_feedback(
@@ -137,7 +148,7 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
         )
 
         try:
-            # ==== 核心修改点：动态嗅探实际运行的 URL ====
+            # ==== 动态嗅探实际运行的 URL ====
             target_url = wait_for_url_in_log(log_path_str, timeout=30)
             tqdm.write(f"   [系统] 嗅探成功！前端稳定运行于: {target_url}")
 
@@ -265,7 +276,6 @@ def run_single_task(task, args):
 
     tqdm.write(f"\n==== Task {task_id} [{difficulty.upper()}] 开始运行 (动态日志嗅探模式) ====")
 
-    # 移除了传给 agent 的 app_port，完全让 agent 自行调度和顺延
     builder = WebGenAgent(
         model=args.builder_model,
         vlm_model=args.visual_copilot_model,

@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 
-# 【修复 1】兜底配置必须写死 3000 端口
+# 【核心修改】去除兜底配置中的硬编码端口，拥抱动态顺延机制
 vite_file_content = """import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -10,15 +10,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 3000, 
-    strictPort: true, 
     watch: {
       usePolling: true,
       interval: 1000
     }
-  },
-  preview: {
-    port: 3000
   }
 })"""
 
@@ -35,8 +30,7 @@ def extract_and_write_files(response: str, workspace_dir: str):
     matches = re.findall(pattern, response, flags=re.DOTALL | re.IGNORECASE)
 
     for file_path, file_content in matches:
-        # 【修复 2：史诗级 Bug 终结者】
-        # 绝对不能用 html.unescape()！只精准替换尖括号和 & 号，保护单双引号不被破坏
+        # 只精准替换尖括号和 & 号，保护单双引号不被破坏
         decoded_content = file_content.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
         # 安全防御：去除绝对路径前缀
@@ -63,7 +57,6 @@ def extract_and_write_files(response: str, workspace_dir: str):
 
 
 def get_sorted_file_paths(workspace_root):
-    # 此处保持你的原样逻辑不变
     workspace_root = Path(workspace_root).resolve()
     all_files = []
 

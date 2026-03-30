@@ -4,6 +4,8 @@ import shutil
 import time
 import sys
 import re
+import socket
+from contextlib import closing
 from typing import Dict, Tuple, Any
 
 # 引入项目根目录
@@ -21,6 +23,16 @@ from utils import (
 )
 from utils.vlm_generation import vlm_generation, encode_image, compress_and_encode_image
 from utils.execute_for_feedback import BrowserEnv, run_commands, execute_for_feedback
+
+
+# --- 动态端口辅助函数 ---
+def find_free_port():
+    """向操作系统借一个绝对空闲的随机端口，用作 Vite 的首选起点"""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
 
 # ==============================================================================
 # [核心逻辑] INTERNAL_TEST_PROMPT (无标签纯视觉 + 键盘支持版)
@@ -95,7 +107,6 @@ def remove_dir(directory):
 
 
 class WebGenAgent:
-    # 🌟 修改 1: 移除 __init__ 中的 app_port 参数
     def __init__(self, model, vlm_model, fb_model, workspace_dir, log_dir, instruction, max_iter, overwrite,
                  error_limit, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, custom_system_prompt=None,
                  difficulty="middle", max_simulation_steps=15):
@@ -231,13 +242,14 @@ class WebGenAgent:
 
         print(f"\033[95m[Agent]: Audit Goal -> {criteria[:100]}...\033[0m")
 
-        # 🌟 修改 2: 移除内部自主测试启动命令中的硬编码端口
-        dynamic_start_cmd = "npm run dev"
+        # 🌟 随机分配首选端口，让 Vite 优先使用，避免并行任务都在抢 5173
+        preferred_port = find_free_port()
+        dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
+
         env = BrowserEnv(
             project_dir=self.workspace_dir,
             log_dir=self.log_dir,
             start_cmd=dynamic_start_cmd
-            # 移除了 app_port=self.app_port
         )
 
         trace = []
@@ -246,8 +258,6 @@ class WebGenAgent:
         last_screenshot = None
         context_summary = self._get_context_summary()
         step_idx = 0
-
-        import re
 
         try:
             env.start(target_path)
@@ -454,13 +464,14 @@ class WebGenAgent:
 
             extract_and_write_files(output, self.workspace_dir)
 
-            # 🌟 修改 3: 移除环境反馈函数调用中的 app_port
-            dynamic_start_cmd = "npm run dev"
+            # 🌟 同理，分配首选端口，不再依赖底层去猜
+            preferred_port = find_free_port()
+            dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
+
             f_dict = execute_for_feedback(
                 self.workspace_dir,
                 self.log_dir,
                 start_cmd=dynamic_start_cmd
-                # 移除了 app_port=self.app_port
             )
 
             info_user = {"environment_feedback": f_dict}
