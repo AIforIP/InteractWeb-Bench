@@ -4,7 +4,7 @@ docker run -it --rm \
   --name interactweb_test-2 \
   --network host \
   -v "${PROJECT_PATH}/src:/app/src" \
-  -v "${PROJECT_PATH}/scripts:/app/scripts"
+  -v "${PROJECT_PATH}/scripts:/app/scripts" \
   -v "${PROJECT_PATH}/data:/app/data" \
   -v "${PROJECT_PATH}/experiment_results:/app/experiment_results" \
   -v "${PROJECT_PATH}/.env:/app/.env" \
