@@ -15,8 +15,6 @@ from utils.execute_for_feedback import (
 from agent.webgen_agent import INTERNAL_TEST_PROMPT
 
 
-# 移除了废弃的 find_free_port 函数
-
 def extract_instruction_from_jsonl(filepath, index):
     with open(filepath, 'r', encoding='utf-8') as f:
         lines = f.readlines()
@@ -26,7 +24,6 @@ def extract_instruction_from_jsonl(filepath, index):
     return "unknown", ""
 
 
-# 移除了 target_url 和 app_port 参数，因为现在是动态嗅探的
 def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start_cmd=None,
                                vlm_model="gpt-4o-mini", max_steps=5):
     print(f"启动纯视觉 Agent 单测 (同步动态弹窗处理)...")
@@ -39,6 +36,9 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
     local_server_process = None
     actual_target_url = None
 
+    # 🌟 核心修改 1：为独立测试脚本也准备一个“系统信箱”
+    system_dialog_records = []
+
     def custom_start(dummy_url=None):
         nonlocal local_server_process, actual_target_url
 
@@ -48,7 +48,6 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
             local_server_process, log_path = start_background_service(start_cmd, project_dir, log_file)
 
             try:
-                # 核心修改：使用日志嗅探代替 socket 端口探活
                 actual_target_url = wait_for_url_in_log(log_path, timeout=30)
                 print(f"本地测试服务已成功就绪，嗅探到运行地址: {actual_target_url}")
             except TimeoutError:
@@ -59,13 +58,13 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
         env.playwright = sync_playwright().start()
         env.browser = env.playwright.chromium.launch(headless=False)
 
-        # 强制设定 device_scale_factor=1，防止 Retina 屏幕导致高分辨率截图 Token 激增
         env.context = env.browser.new_context(
             viewport={'width': 1280, 'height': 800},
             device_scale_factor=1
         )
         env.page = env.context.new_page()
 
+        # 🌟 核心修改 2：升级这里的 handle_dialog，把动作记录到信箱里
         def handle_dialog(dialog):
             print(f"[系统弹窗监测] 类型: {dialog.type}, 消息: {dialog.message}")
             if dialog.type == "prompt":
@@ -82,11 +81,19 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
                         ]
                     ).strip().strip("'\"")
                     print(f"[子智能体] 决定填入: {dynamic_input}")
+
+                    system_dialog_records.append(
+                        f"Auto-filled input prompt ('{dialog.message}') with text: '{dynamic_input}'")
                     dialog.accept(dynamic_input)
                 except Exception as e:
                     print(f"[子智能体] 推理失败: {e}，使用默认回退值")
+                    system_dialog_records.append(
+                        f"Auto-filled input prompt ('{dialog.message}') with fallback text: 'Test Value'")
                     dialog.accept("Test Value")
             else:
+                # 处理纯展示的 Alert/Confirm 弹窗
+                system_dialog_records.append(
+                    f"A browser popup appeared saying: '{dialog.message}'. The system automatically clicked OK.")
                 dialog.accept()
 
         env.page.on("dialog", handle_dialog)
@@ -96,7 +103,6 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
     env.start = custom_start
 
     try:
-        # 这里传入 None 即可，实际 URL 会在 custom_start 内部通过嗅探拿到
         env.start(None)
 
         if not actual_target_url:
@@ -110,6 +116,14 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
             img_path = env.capture_observation(step_idx, draw_som=False)
             b64_img = encode_image(img_path)
 
+            # 🌟 核心修改 3：提取系统信箱内容，准备向模型汇报
+            sys_feedback = ""
+            if system_dialog_records:
+                sys_feedback = "\n [SYSTEM NOTIFICATIONS (DO NOT FAIL TEST BASED ON THIS)]:\n"
+                for note in system_dialog_records:
+                    sys_feedback += f"- {note}\n"
+                system_dialog_records.clear()  # 汇报完清空信箱
+
             strict_criteria = ""
             sys_msg = INTERNAL_TEST_PROMPT.format(
                 instruction=ground_truth_instruction,
@@ -118,7 +132,11 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
                 step_idx=step_idx + 1,
                 max_steps=max_steps
             )
+
+            # 🌟 核心修改 4：将通知拼接进上下文
             step_context = f"Action History:\n{history_text}\n"
+            if sys_feedback:
+                step_context += f"{sys_feedback}\n"
 
             print("正在等待 VLM 思考决策...")
 
@@ -162,10 +180,7 @@ def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start
 
 if __name__ == "__main__":
     PROJECT_DIR = r"E:\Agent_work\src\experiment_results\workspaces\000002_P-RAM"
-
-    # 核心修改：移除硬编码端口，仅保留干净的 npm run dev
     START_CMD = "npm run dev"
-
     JSONL_FILE_PATH = r"E:\Agent_work\src\data_generation\test_mini.jsonl"
     TEST_DATA_INDEX = 0
 

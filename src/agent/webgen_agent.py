@@ -273,10 +273,14 @@ class WebGenAgent:
         preferred_port = find_free_port()
         dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
 
+        # 🌟 修改 1：在实例化 BrowserEnv 时，下放指令、模型和调用函数
         env = BrowserEnv(
             project_dir=self.workspace_dir,
             log_dir=self.log_dir,
-            start_cmd=dynamic_start_cmd
+            start_cmd=dynamic_start_cmd,
+            instruction=self.instruction,  # 传任务
+            builder_model=self.model,  # 传当前的 Builder 模型 (无状态)
+            llm_caller=llm_generation  # 传生成函数
         )
 
         trace = []
@@ -322,6 +326,17 @@ class WebGenAgent:
                     else:
                         print(f"\033[91m{log_feedback}\033[0m")
 
+                # 🌟 修改 2：从“专线信箱”提取系统通知 (后台弹窗处理记录)
+                system_notes = []
+                if hasattr(env, 'get_and_clear_system_notes'):
+                    system_notes = env.get_and_clear_system_notes()
+
+                sys_feedback = ""
+                if system_notes:
+                    sys_feedback = "\n [SYSTEM NOTIFICATIONS (DO NOT FAIL TEST BASED ON THIS)]:\n"
+                    for note in system_notes:
+                        sys_feedback += f"- {note}\n"
+
                 sys_msg = INTERNAL_TEST_PROMPT.format(
                     instruction=self.instruction,
                     criteria=criteria,
@@ -330,7 +345,10 @@ class WebGenAgent:
                     max_steps=self.max_visual_steps
                 )
 
+                # 🌟 修改 3：组装包含系统通知的上下文
                 step_context = f"Action History:\n{history_text}\n"
+                if sys_feedback:
+                    step_context += f"{sys_feedback}\n"
                 if log_feedback:
                     step_context += f"{log_feedback}\n"
 

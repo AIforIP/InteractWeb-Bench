@@ -135,11 +135,15 @@ def run_commands(cmds, cwd):
 #  BrowserEnv: 视觉代理交互环境
 # ==============================================================================
 class BrowserEnv:
-    # 移除了死板的 app_port，直接接收动态嗅探到的 target_url
-    def __init__(self, project_dir, log_dir, start_cmd="npm run dev"):
+    # 🌟 修改 1: 增加指令、Builder模型和生成函数的接收参数，以及系统专线信箱
+    def __init__(self, project_dir, log_dir, start_cmd="npm run dev", instruction="", builder_model=None,
+                 llm_caller=None):
         self.project_dir = project_dir
         self.log_dir = log_dir
         self.start_cmd = start_cmd
+        self.instruction = instruction
+        self.builder_model = builder_model
+        self.llm_caller = llm_caller
         self.base_url = None
         self.playwright = None
         self.browser = None
@@ -147,6 +151,7 @@ class BrowserEnv:
         self.page = None
         self.process = None
         self.console_logs = []
+        self.system_notes = []  # 新增：专属的系统通知频道
 
     def start(self, target_path=None):
         # 1. 启动服务并动态嗅探 URL
@@ -163,9 +168,52 @@ class BrowserEnv:
         self.context = self.browser.new_context(viewport={'width': 1200, 'height': 800})
         self.page = self.context.new_page()
 
+        # 🌟 修改 2: 全能版 handle_dialog，结合 Builder 推断和信箱记录
         def handle_dialog(dialog):
-            print(f"  > [Visual Copilot] Auto-accepted Dialog: {dialog.message}")
-            dialog.accept()
+            print(f"  > [Visual Copilot] 捕获系统弹窗 Type: {dialog.type}, Message: {dialog.message}")
+
+            if dialog.type == "prompt":
+                if self.llm_caller and self.builder_model:
+                    try:
+                        print("    -> 正在呼叫 Builder 模型推断填表内容...")
+                        sys_msg = "You are an automated web testing sub-agent. Decide what text to input into a website's prompt dialog."
+                        user_msg = (
+                            f"Main Task Instruction: {self.instruction}\n\n"
+                            f"The website popup asks: '{dialog.message}'.\n"
+                            "Reply strictly with ONLY the exact text value to input, no quotes, no explanations."
+                        )
+                        messages = [
+                            {"role": "system", "content": sys_msg},
+                            {"role": "user", "content": user_msg}
+                        ]
+
+                        response = self.llm_caller(
+                            messages,
+                            self.builder_model,
+                            max_tokens=20,
+                            temperature=0.1
+                        )
+
+                        dynamic_input = response.strip().strip("'\"")
+                        print(f"    -> Builder 模型决定填入: 【{dynamic_input}】")
+
+                        self.system_notes.append(
+                            f"Auto-filled input prompt ('{dialog.message}') with text: '{dynamic_input}'")
+                        dialog.accept(dynamic_input)
+                    except Exception as e:
+                        print(f"    -> 动态推理失败: {e}。使用安全回退方案。")
+                        self.system_notes.append(
+                            f"Auto-filled input prompt ('{dialog.message}') with fallback text: 'test_input'")
+                        dialog.accept("test_input")
+                else:
+                    print("    -> 警告: 未设置 Builder 模型，将提交空内容。")
+                    self.system_notes.append(f"Intercepted prompt ('{dialog.message}'), submitted empty string.")
+                    dialog.accept()
+            else:
+                print("    -> 捕获信息通知弹窗，系统自动点击确定。")
+                self.system_notes.append(
+                    f"A browser popup appeared saying: '{dialog.message}'. The system automatically clicked OK.")
+                dialog.accept()
 
         self.page.on("dialog", handle_dialog)
         self.page.on("console",
@@ -185,6 +233,12 @@ class BrowserEnv:
 
     def get_console_logs(self):
         return [l for l in self.console_logs if l['type'] in ['error', 'exception']]
+
+    # 🌟 新增：提取并清空系统通知频道的方法
+    def get_and_clear_system_notes(self):
+        notes = self.system_notes.copy()
+        self.system_notes.clear()
+        return notes
 
     def is_page_empty(self):
         try:
@@ -277,7 +331,7 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
         if "npm ERR!" in out or "EBADENGINE" in out or "Unsupported engine" in out:
             feedback["install_error"].append(f"Issue in '{cmd}':\n{out[-600:]}")
 
-    # 环境初始化：不再传递 app_port
+    # 环境初始化：不再传递 app_port (这里的额外参数默认即可，因为它不是视觉推断阶段)
     env = BrowserEnv(project_dir, log_dir, start_cmd)
 
     try:
@@ -336,6 +390,7 @@ def execute_for_webvoyager_feedback(instruction, project_dir, log_dir, vlm_model
     from .vlm_generation import vlm_generation, encode_image
     run_commands(cmds, cwd=project_dir)
 
+    # 这里的 env 也是只供外部调用，保持默认即可
     env = BrowserEnv(project_dir, log_dir, start_cmd)
     trace, status, grade, suggestions = [], "unknown", 1.0, "Simulation failed."
 
