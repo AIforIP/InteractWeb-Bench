@@ -6,6 +6,6 @@ docker run -it --rm \
   -v ./data:/app/data \
   -v ./experiment_results:/app/experiment_results \
   -v .env:/app/.env \
-  -v config.yaml:/app/config.yaml \
+  -v .config.yaml:/app/config.yaml \
   --entrypoint /bin/bash \
   interactweb-bench:v1.0
