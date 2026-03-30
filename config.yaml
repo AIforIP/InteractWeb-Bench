@@ -1,15 +1,15 @@
 # 数据路径配置
-data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
+# data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
 #docker:
-#data_path: "/app/data/high_scores_simulation_labeled.jsonl"
-output_dir: "/home/hhr/home/store/experiment_results"
+data_path: "/app/data/high_scores_simulation_labeled.jsonl"
+# output_dir: "/home/hhr/home/store/experiment_results"
 #docker:
-#output_dir: "/app/experiment_results"
+output_dir: "/app/experiment_results"
 # 模型选择配置
 models:
 
-  builder_model: "Qwen3.5-27B"
-  visual_copilot_model: "Qwen3.5-27B"
+  builder_model: "gemma-3-12b-it"
+  visual_copilot_model: "gemma-3-12b-it"
 
   webvoyager_model: "gpt-5-mini"
   user_model: "deepseek-v3.2"

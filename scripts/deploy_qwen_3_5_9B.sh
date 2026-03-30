@@ -23,5 +23,6 @@ python -m vllm.entrypoints.openai.api_server \
     --host 0.0.0.0 \
     --trust-remote-code \
     --max-model-len 128000 \
-    --limit-mm-per-prompt '{"image": 5}' \
-    --gpu-memory-utilization 0.85
+    --limit-mm-per-prompt '{"image": 5, "video": 0}' \
+    --gpu-memory-utilization 0.85 \
+    --enforce-eager
