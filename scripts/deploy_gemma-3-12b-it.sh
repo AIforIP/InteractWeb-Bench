@@ -25,5 +25,4 @@ CUDA_VISIBLE_DEVICES=2 python -m vllm.entrypoints.openai.api_server \
     --max-model-len 128000 \
     --limit-mm-per-prompt '{"image": 5}' \
     --gpu-memory-utilization 0.85 \
-    --tensor-parallel-size 1 \
-    --enforce-eager
+    --tensor-parallel-size 1

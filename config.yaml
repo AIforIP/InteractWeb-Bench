@@ -7,7 +7,7 @@ data_path: "/app/data/high_scores_simulation_labeled.jsonl"
 output_dir: "/app/experiment_results"
 # 模型选择配置
 models:
-  builder_model: "Qwen3.5-9B"
-  visual_copilot_model: "Qwen3.5-9B"
+  builder_model: "Qwen3.5-27B"
+  visual_copilot_model: "Qwen3.5-27B"
   webvoyager_model: "gpt-5-mini"
   user_model: "deepseek-v3.2"
