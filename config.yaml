@@ -1,7 +1,7 @@
 # 数据路径配置
 # data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
 #docker:
-data_path: "/app/data/mid_scores_simulation_labeled.jsonl"
+data_path: "/app/data/high_scores_simulation_labeled.jsonl"
 # output_dir: "/home/hhr/home/store/experiment_results"
 #docker:
 output_dir: "/app/experiment_results"
