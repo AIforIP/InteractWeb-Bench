@@ -95,10 +95,10 @@ def remove_dir(directory):
 
 
 class WebGenAgent:
+    # 🌟 修改 1: 移除 __init__ 中的 app_port 参数
     def __init__(self, model, vlm_model, fb_model, workspace_dir, log_dir, instruction, max_iter, overwrite,
                  error_limit, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, custom_system_prompt=None,
-                 difficulty="middle", max_simulation_steps=15, app_port=3000):
-        self.app_port = app_port
+                 difficulty="middle", max_simulation_steps=15):
         self.model = model
         self.vlm_model = vlm_model
         self.fb_model = fb_model
@@ -231,12 +231,13 @@ class WebGenAgent:
 
         print(f"\033[95m[Agent]: Audit Goal -> {criteria[:100]}...\033[0m")
 
-        dynamic_start_cmd = f"npm run dev -- --port {self.app_port}"
+        # 🌟 修改 2: 移除内部自主测试启动命令中的硬编码端口
+        dynamic_start_cmd = "npm run dev"
         env = BrowserEnv(
             project_dir=self.workspace_dir,
             log_dir=self.log_dir,
-            start_cmd=dynamic_start_cmd,
-            app_port=self.app_port
+            start_cmd=dynamic_start_cmd
+            # 移除了 app_port=self.app_port
         )
 
         trace = []
@@ -453,12 +454,13 @@ class WebGenAgent:
 
             extract_and_write_files(output, self.workspace_dir)
 
-            dynamic_start_cmd = f"npm run dev -- --port {self.app_port}"
+            # 🌟 修改 3: 移除环境反馈函数调用中的 app_port
+            dynamic_start_cmd = "npm run dev"
             f_dict = execute_for_feedback(
                 self.workspace_dir,
                 self.log_dir,
-                start_cmd=dynamic_start_cmd,
-                app_port=self.app_port
+                start_cmd=dynamic_start_cmd
+                # 移除了 app_port=self.app_port
             )
 
             info_user = {"environment_feedback": f_dict}

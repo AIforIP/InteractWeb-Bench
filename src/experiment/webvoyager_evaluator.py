@@ -4,9 +4,7 @@ import re
 import json
 import time
 import argparse
-import time
-# 在脚本顶部添加：
-from utils.execute_for_feedback import is_port_open
+
 # ==============================================================================
 # 关键修正：将项目的 src 根目录强制加入环境变量，必须放在所有自定义模块导入之前
 # ==============================================================================
@@ -16,6 +14,9 @@ if project_root not in sys.path:
 
 from webvoyager.run import run_single_task
 
+# 导入新的进程组清理与嗅探工具（供底部的独立测试模块使用）
+from utils.execute_for_feedback import start_background_service, wait_for_url_in_log, stop_process_tree
+
 # 假设项目中已存在 llm_generation 工具，用于发起纯文本对话
 try:
     from utils import llm_generation
@@ -24,20 +25,10 @@ except ImportError:
 
 
 def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slots: list, task_id: str,
-                             args_dict: dict, app_port: int) -> dict:  # 👈 新增 app_port
-
-    # =================================================================
-    # 0. 动态等待指定的应用端口就绪
-    # =================================================================
-    print(f"   [系统] 等待 localhost:{app_port} 端口就绪 (最长 30 秒)...")
-    for _ in range(30):
-        # 请确保引入了 is_port_open 函数
-        if is_port_open(app_port):
-            print(f"   [系统] 端口 {app_port} 已连通！开始测试。")
-            break
-        time.sleep(1)
-    else:
-        print(f"   [警告] 端口 {app_port} 未能就绪，测试可能会报错。")
+                             args_dict: dict, app_port: int = None) -> dict:
+    # [移除] 删除了旧版的 is_port_open 30秒探活循环。
+    # 因为此时传入的 target_url 已经是 100% 确认可用且跑起来的地址了。
+    print(f"   [系统] 接收到打分任务，目标地址: {target_url}")
 
     # 1. 构造检查清单
     checklist_str = ""
@@ -67,10 +58,10 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
         "6. **AUTO-FILLED DIALOGS (CRITICAL)**: Our framework instantly auto-fills native browser popups in the background. If you click an 'Add' or 'Create' button and immediately see a new item (e.g., 'Test Input Value') appear on the page, consider the addition function PASSED. Do NOT fail the item just because you didn't see an input form."
     )
 
-    # 🌟 将目标 URL 动态指向分配的 app_port
+    # 🌟 核心修改 1：直接使用传入的 target_url，抛弃硬编码端口拼接
     task = {
         "id": task_id,
-        "web": f"http://localhost:{app_port}/",
+        "web": target_url,
         "ques": eval_ques
     }
 
@@ -171,32 +162,8 @@ def evaluate_with_webvoyager(target_url: str, user_instruction: str, oracle_slot
 # ==============================================================================
 # 独立调试与测试模块 (可视化有头模式，不污染轨迹文件)
 # ==============================================================================
-# ==============================================================================
-# 独立调试与测试模块 (可视化有头模式，不污染轨迹文件)
-# ==============================================================================
 if __name__ == "__main__":
-    import os
-    import sys
-    import json
     import shutil
-    import subprocess
-    import time
-    import socket
-    from contextlib import closing
-
-
-    # 动态获取可用空闲端口的辅助函数
-    def find_free_port():
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-            s.bind(('', 0))
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            return s.getsockname()[1]
-
-
-    # 确保能找到项目根目录下的 utils 和 webvoyager 模块
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
 
     print("\n 开始独立测试任务 (屏幕可视化模式 / 结果不写入轨迹)...")
 
@@ -256,24 +223,17 @@ if __name__ == "__main__":
             print(f"   [系统] 成功加载 {len(test_oracle_slots)} 条测试标准。")
 
             # ========================================================
-            # 💡 核心修改：动态分配端口，摒弃 3000
+            # 🌟 核心修改 2：独立调试模块全面拥抱动态嗅探与进程组清理
             # ========================================================
-            app_port = find_free_port()
-            target_url = f"http://localhost:{app_port}"
+            print(f"   [系统] 启动 npm run dev (动态嗅探模式)...")
+            log_file = os.path.join(workspace_dir, "standalone_debug_server.log")
 
-            print(f"   [系统] 启动 npm run dev (分配随机端口: {app_port})...")
+            # 使用进程组启动服务
+            server_process, log_path_str = start_background_service("npm run dev", workspace_dir, log_file)
 
-            server_process = subprocess.Popen(
-                f"npm run dev -- --port {app_port}",
-                cwd=workspace_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                shell=True
-            )
-
-            # 备注：探活逻辑已被转移到 evaluate_with_webvoyager 内部
-            # 这里不需要再写冗长的 for 循环探测端口了，直接交给评测函数处理
-            time.sleep(2)
+            # 动态嗅探真实 URL
+            target_url = wait_for_url_in_log(log_path_str, timeout=30)
+            print(f"   [系统] 嗅探成功！本地测试服务运行于: {target_url}")
 
             # ======================================================
             # 配置 WebVoyager 测试参数
@@ -292,11 +252,10 @@ if __name__ == "__main__":
                 "text_only": False,
                 "fix_box_color": False,
                 "save_accessibility_tree": False,
-                "max_attached_imgs": 3,  # 强烈建议改成1，省钱省token
+                "max_attached_imgs": 3,  
                 "max_iter": 10,
                 "api_model": "gpt-5-mini",  # 修正为 gpt-4o-mini 或你 .env 里的模型
                 "seed": 42
-                # 由于这是独立测试，没有 run_simulation 的动态传参，底层会自动 fallback 读 .env 里的 KEY 和 URL
             }
 
             print("   [系统] 正在进行可视化的 WebVoyager 打分...")
@@ -306,7 +265,7 @@ if __name__ == "__main__":
                 oracle_slots=test_oracle_slots,
                 task_id=task_folder_name,
                 args_dict=test_args_dict,
-                app_port=app_port  # 👈 必须把端口传进去，否则报 TypeError!
+                app_port=None  # 不再需要传入具体端口
             )
 
             # 仅在终端打印结果，不再覆写 interaction_history.json
@@ -326,11 +285,8 @@ if __name__ == "__main__":
 
         finally:
             print("   [系统] 清理本轮专属服务器占用...")
-            try:
-                if server_process:
-                    server_process.terminate()
-                    server_process.wait(timeout=3)
-            except:
-                pass
+            if server_process:
+                # 🌟 核心修改 3：独立调试模块同样使用一锅端清理，杜绝僵尸进程
+                stop_process_tree(server_process)
 
     print("\n 所有任务可视化测试结束！")

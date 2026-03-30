@@ -2,26 +2,20 @@ import os
 import time
 import json
 import re
-import socket
-from contextlib import closing
 from playwright.sync_api import sync_playwright
 
 from utils.vlm_generation import vlm_generation, encode_image
+# 引入新架构的动态嗅探和清理工具，移除 is_port_open
 from utils.execute_for_feedback import (
     BrowserEnv,
-    is_port_open,
     start_background_service,
+    wait_for_url_in_log,
     stop_process_tree
 )
 from agent.webgen_agent import INTERNAL_TEST_PROMPT
 
 
-def find_free_port():
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
-
+# 移除了废弃的 find_free_port 函数
 
 def extract_instruction_from_jsonl(filepath, index):
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -32,8 +26,9 @@ def extract_instruction_from_jsonl(filepath, index):
     return "unknown", ""
 
 
-def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir=None, start_cmd=None,
-                               vlm_model="gpt-4o-mini", max_steps=5, app_port=3000):
+# 移除了 target_url 和 app_port 参数，因为现在是动态嗅探的
+def run_standalone_visual_test(ground_truth_instruction, project_dir=None, start_cmd=None,
+                               vlm_model="gpt-4o-mini", max_steps=5):
     print(f"启动纯视觉 Agent 单测 (同步动态弹窗处理)...")
     print(f"测试指令: {ground_truth_instruction}")
 
@@ -42,28 +37,29 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
 
     env = BrowserEnv(project_dir=".", log_dir=log_dir, start_cmd="")
     local_server_process = None
+    actual_target_url = None
 
-    def custom_start(url):
-        nonlocal local_server_process
+    def custom_start(dummy_url=None):
+        nonlocal local_server_process, actual_target_url
 
-        if project_dir and start_cmd and not is_port_open(app_port):
-            print(f"正在目录 {project_dir} 自动执行 '{start_cmd}'...")
+        if project_dir and start_cmd:
+            print(f"正在目录 {project_dir} 自动执行 '{start_cmd}' (动态嗅探模式)...")
             log_file = os.path.join(log_dir, "standalone_service.log")
-            local_server_process, _ = start_background_service(start_cmd, project_dir, log_file)
+            local_server_process, log_path = start_background_service(start_cmd, project_dir, log_file)
 
-            for _ in range(20):
-                if is_port_open(app_port):
-                    print(f"本地测试服务已在端口 {app_port} 成功就绪！")
-                    break
-                time.sleep(1)
-            else:
-                print(f"警告: 等待服务在端口 {app_port} 启动超时。")
+            try:
+                # 核心修改：使用日志嗅探代替 socket 端口探活
+                actual_target_url = wait_for_url_in_log(log_path, timeout=30)
+                print(f"本地测试服务已成功就绪，嗅探到运行地址: {actual_target_url}")
+            except TimeoutError:
+                print(f"警告: 等待服务启动超时。请检查 {log_file}")
+                return
 
-        print(f"正在访问目标网址: {url}")
+        print(f"正在访问目标网址: {actual_target_url}")
         env.playwright = sync_playwright().start()
         env.browser = env.playwright.chromium.launch(headless=False)
 
-        # 核心修改：强制设定 device_scale_factor=1，防止 Retina 屏幕导致高分辨率截图 Token 激增
+        # 强制设定 device_scale_factor=1，防止 Retina 屏幕导致高分辨率截图 Token 激增
         env.context = env.browser.new_context(
             viewport={'width': 1280, 'height': 800},
             device_scale_factor=1
@@ -94,13 +90,18 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
                 dialog.accept()
 
         env.page.on("dialog", handle_dialog)
-        env.page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        env.page.goto(actual_target_url, wait_until="domcontentloaded", timeout=15000)
         env.console_logs = []
 
     env.start = custom_start
 
     try:
-        env.start(target_url)
+        # 这里传入 None 即可，实际 URL 会在 custom_start 内部通过嗅探拿到
+        env.start(None)
+
+        if not actual_target_url:
+            raise Exception("无法获取目标网址，退出测试。")
+
         history_text = ""
 
         for step_idx in range(max_steps):
@@ -121,7 +122,6 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
 
             print("正在等待 VLM 思考决策...")
 
-            # 保留原有的 data:image/png;base64
             response = vlm_generation(
                 model=vlm_model,
                 messages=[
@@ -163,10 +163,8 @@ def run_standalone_visual_test(target_url, ground_truth_instruction, project_dir
 if __name__ == "__main__":
     PROJECT_DIR = r"E:\Agent_work\src\experiment_results\workspaces\000002_P-RAM"
 
-    # 核心修改：利用 find_free_port() 动态分配端口和目标 URL
-    APP_PORT = find_free_port()
-    TARGET_WEB_URL = f"http://localhost:{APP_PORT}"
-    START_CMD = f"npm run dev -- --port {APP_PORT}"
+    # 核心修改：移除硬编码端口，仅保留干净的 npm run dev
+    START_CMD = "npm run dev"
 
     JSONL_FILE_PATH = r"E:\Agent_work\src\data_generation\test_mini.jsonl"
     TEST_DATA_INDEX = 0
@@ -175,15 +173,13 @@ if __name__ == "__main__":
         task_id, instruction = extract_instruction_from_jsonl(JSONL_FILE_PATH, TEST_DATA_INDEX)
         print(f"=====================================")
         print(f"成功加载任务 ID: {task_id}")
-        print(f"分配随机测试端口: {APP_PORT}")
+        print(f"即将使用动态嗅探启动服务")
         print(f"=====================================")
 
         run_standalone_visual_test(
-            target_url=TARGET_WEB_URL,
             ground_truth_instruction=instruction,
             project_dir=PROJECT_DIR,
-            start_cmd=START_CMD,
-            app_port=APP_PORT
+            start_cmd=START_CMD
         )
     except Exception as err:
         print(f"初始化失败: {err}")

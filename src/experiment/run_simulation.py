@@ -2,12 +2,9 @@ import argparse
 import os
 import json
 import sys
-import subprocess
-import time
 import shutil
-import socket
 import concurrent.futures
-from contextlib import closing
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from tqdm import tqdm  # 引入进度条库
 
@@ -20,8 +17,13 @@ load_dotenv()
 from agent.webgen_agent import WebGenAgent
 from experiment.simulation_agents import UserSimulator
 
-# 移除了写死的 force_kill_port_3000，引入 is_port_open
-from utils.execute_for_feedback import execute_for_feedback, is_port_open
+# 导入修改后的工具链 (核心：移除了写死的端口探活，引入动态嗅探和进程清理)
+from utils.execute_for_feedback import (
+    execute_for_feedback,
+    start_background_service,
+    wait_for_url_in_log,
+    stop_process_tree
+)
 
 # 导入 WebVoyager 评估器
 try:
@@ -38,16 +40,8 @@ MAX_SIMULATION_STEPS = 8
 
 
 # ==============================================================================
-#  核心工具函数
+#  基础工具函数
 # ==============================================================================
-def find_free_port():
-    """向操作系统申请一个绝对安全的随机空闲端口"""
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
-
-
 def get_vlm_endpoint(model_name: str) -> str:
     """
     解析 .env 中的 LOCAL_MODELS_MAP，根据模型名动态返回对应的 API URL。
@@ -72,9 +66,6 @@ def get_vlm_endpoint(model_name: str) -> str:
         return fallback_url
 
 
-# ==============================================================================
-#  数据持久化逻辑
-# ==============================================================================
 def save_interaction_history(messages, output_file, format_error_count):
     history = []
     stats = {
@@ -106,25 +97,26 @@ def save_interaction_history(messages, output_file, format_error_count):
 
 
 # ==============================================================================
-#  评估逻辑 (并发端口隔离 + 动态模型路由)
+#  最终评估逻辑 (彻底使用动态嗅探架构)
 # ==============================================================================
 def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_slots, user_instruction, task_id, args,
-                             app_port, stop_reason="submitted"):
-    tqdm.write(f"\n[系统] 正在执行最终评估 (任务: {task_id}, 端口: {app_port}, 原因: {stop_reason})...")
+                             stop_reason="submitted"):
+    tqdm.write(f"\n[系统] 正在执行最终评估 (任务: {task_id}, 原因: {stop_reason})...")
 
     if not oracle_slots:
         tqdm.write("\033[91m[警告] 传入的 oracle_slots 为空！本次评估注定为 0 分。\033[0m")
     else:
         tqdm.write(f"   [系统] 成功加载 {len(oracle_slots)} 项打分标准，准备启动 WebVoyager 验收。")
 
-    # 动态构建启动命令并将端口传给探活机制
-    dynamic_start_cmd = f"npm run dev -- --port {app_port}"
+    # 去掉强加的端口参数，让环境自然启动
+    dynamic_start_cmd = "npm run dev"
+
+    # 第一次探活：仅仅确认代码本身能否跑起来，收集编译错误日志等
     env_info = execute_for_feedback(
         project_dir=workspace_dir,
         log_dir=log_dir,
         start_cmd=dynamic_start_cmd,
-        step_idx="final_eval",
-        app_port=app_port
+        step_idx="final_eval"
     )
 
     if env_info.get("start_error"):
@@ -134,49 +126,26 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             "raw_metrics": {"Total_Weight": 0.0, "Details": []}
         }
     else:
-        # ==== 核心修改点：强力环境变量注入与崩溃日志收集 ====
-        current_env = os.environ.copy()
-        current_env["PORT"] = str(app_port)  # 兼容 CRA 等框架
-        current_env["VITE_PORT"] = str(app_port)  # 强制 Vite 端口
-        current_env["HOST"] = "0.0.0.0"  # 强制开放监听
+        # 第二次启动：为 WebVoyager 长期评估维持服务生命周期
+        tqdm.write(f"   [系统] 正在启动前端服务器以进行 WebVoyager 持续评估...")
 
-        tqdm.write(f"   [系统] 正在启动前端服务器 (指定端口: {app_port})...")
-
-        server_log_path = os.path.join(log_dir, "frontend_server.log")
-        server_log_file = open(server_log_path, "w", encoding="utf-8")
-
-        server_process = subprocess.Popen(
-            dynamic_start_cmd,
+        server_log_path = os.path.join(log_dir, "frontend_eval_server.log")
+        server_process, log_path_str = start_background_service(
+            start_cmd=dynamic_start_cmd,
             cwd=workspace_dir,
-            env=current_env,  # <--- 注入环境变量
-            stdout=server_log_file,  # <--- 日志落盘
-            stderr=subprocess.STDOUT,
-            shell=True
+            log_file=server_log_path
         )
 
-        # 智能探活 (带防呆检查)
-        tqdm.write(f"   [系统] 等待 localhost:{app_port} 端口就绪...")
-        port_ready = False
-        for _ in range(30):
-            # 检查进程是否秒崩
-            if server_process.poll() is not None:
-                tqdm.write(f"\033[91m   [致命错误] 前端服务器已意外崩溃！详情请查看: {server_log_path}\033[0m")
-                break
-
-            if is_port_open(app_port):
-                tqdm.write(f"   [系统] 端口 {app_port} 已连通！")
-                port_ready = True
-                break
-            time.sleep(1)
-
-        if not port_ready:
-            tqdm.write(f"\033[93m   [警告] 端口 {app_port} 未能就绪，测试可能会失败。原因请查阅 {server_log_path}\033[0m")
-        # ======================================================
-
         try:
+            # ==== 核心修改点：动态嗅探实际运行的 URL ====
+            target_url = wait_for_url_in_log(log_path_str, timeout=30)
+            tqdm.write(f"   [系统] 嗅探成功！前端稳定运行于: {target_url}")
+
+            # 解析出实际端口，传给底层 evaluator
+            extracted_port = int(urlparse(target_url).port or 80)
+
             eval_log_dir = os.path.join(log_dir, "eval_webvoyager")
             eval_download_dir = os.path.join(log_dir, "eval_downloads")
-
             shutil.rmtree(eval_log_dir, ignore_errors=True)
             os.makedirs(eval_log_dir, exist_ok=True)
             shutil.rmtree(eval_download_dir, ignore_errors=True)
@@ -200,22 +169,20 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
                 "max_attached_imgs": 3,  # 极限控制 Token
                 "max_iter": 16,
                 "api_model": target_model,
-                "vlm_base_url": assigned_vlm_url,  # 动态路由注入
-                "vlm_api_key": api_key,  # 动态密钥注入
+                "vlm_base_url": assigned_vlm_url,
+                "vlm_api_key": api_key,
                 "seed": 42
             }
 
             tqdm.write(f"   [系统] WebVoyager 代理已切入 (模型: {target_model} | 节点: {assigned_vlm_url})...")
 
-            # 动态拼接 target_url 传给 WebVoyager
-            target_url = f"http://localhost:{app_port}/"
             raw_eval_result = evaluate_with_webvoyager(
                 target_url=target_url,
                 user_instruction=user_instruction,
                 oracle_slots=oracle_slots,
                 task_id=f"{task_id}_eval",
                 args_dict=wv_args_dict,
-                app_port=app_port  # 传入以便底层也能验证
+                app_port=extracted_port  # 传回提取的真实端口
             )
 
             eval_result = {
@@ -227,20 +194,16 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             }
 
         except Exception as e:
-            tqdm.write(f"\033[91m[错误] WebVoyager 评估过程中发生异常: {e}\033[0m")
+            tqdm.write(f"\033[91m[错误] WebVoyager 评估异常 (或服务嗅探超时): {e}\033[0m")
             eval_result = {
                 "status": "ERROR", "sr": 0, "tcr": 0.0,
                 "text": f"Evaluation Error: {str(e)}",
                 "raw_metrics": {"Total_Weight": 0.0, "Details": []}
             }
         finally:
-            # 安全清理专属的 Node.js 进程
-            if 'server_process' in locals() and server_process.poll() is None:
-                try:
-                    server_process.terminate()
-                    server_process.wait(timeout=3)
-                except Exception:
-                    server_process.kill()
+            # ==== 核心保障：无论打分成功与否，一锅端掉当前测试任务的服务 ====
+            if 'server_process' in locals():
+                stop_process_tree(server_process)
 
     tqdm.write(f"   => Final TCR: {eval_result.get('tcr', 0.0) * 100:.1f}% | Status: {eval_result.get('status')}")
 
@@ -277,19 +240,17 @@ def run_single_task(task, args):
     log_dir = os.path.join(args.output_dir, safe_model_name, "logs", task_id)
 
     # =========================================================================
-    # 2. 样例级断点续跑：深度校验是否真实完成了打分 (以 is_final: True 为唯一准则)
+    # 样例级断点续跑：深度校验是否真实完成了打分 (以 is_final: True 为唯一准则)
     # =========================================================================
     interaction_history_path = os.path.join(log_dir, "interaction_history.json")
     if not args.overwrite and os.path.exists(interaction_history_path):
         try:
             with open(interaction_history_path, "r", encoding="utf-8") as f:
                 history_data = json.load(f)
-
             trajectory = history_data.get("trajectory", [])
             if trajectory:
                 last_turn = trajectory[-1]
                 debug_info = last_turn.get("debug_info", {})
-
                 if debug_info.get("is_final") is True:
                     eval_detail = debug_info.get("evaluation_detail", {})
                     status = eval_detail.get("status", "UNKNOWN")
@@ -302,10 +263,9 @@ def run_single_task(task, args):
         except Exception as e:
             tqdm.write(f"[断点续跑] 读取任务 {task_id} 历史记录失败 ({e})，将重新执行。")
 
-    # 3. 动态分配端口并打印启动信息
-    app_port = find_free_port()
-    tqdm.write(f"\n==== Task {task_id} [{difficulty.upper()}] 分配网页端口: {app_port} ====")
+    tqdm.write(f"\n==== Task {task_id} [{difficulty.upper()}] 开始运行 (动态日志嗅探模式) ====")
 
+    # 移除了传给 agent 的 app_port，完全让 agent 自行调度和顺延
     builder = WebGenAgent(
         model=args.builder_model,
         vlm_model=args.visual_copilot_model,
@@ -317,8 +277,7 @@ def run_single_task(task, args):
         overwrite=args.overwrite,
         error_limit=error_limit,
         difficulty=difficulty,
-        max_simulation_steps=MAX_SIMULATION_STEPS,
-        app_port=app_port
+        max_simulation_steps=MAX_SIMULATION_STEPS
     )
 
     user_sim = UserSimulator(
@@ -340,7 +299,6 @@ def run_single_task(task, args):
         loop_idx += 1
 
         if action["type"] == "question":
-            # 正常提问，交给用户模拟器回答
             answer = user_sim.answer_question(action["content"])
             builder.messages.append({"role": "user", "content": answer})
             turn_counter += 1
@@ -348,7 +306,6 @@ def run_single_task(task, args):
 
         elif action["type"] in ["coding", "internal_test", "format_error"]:
             if builder.is_finished: break
-
             turn_counter += 1
             continue
 
@@ -359,7 +316,6 @@ def run_single_task(task, args):
                 user_instruction=ground_truth,
                 task_id=task_id,
                 args=args,
-                app_port=app_port,
                 stop_reason="submitted"
             )
             is_graded = True
@@ -373,7 +329,6 @@ def run_single_task(task, args):
             user_instruction=user_instruction,
             task_id=task_id,
             args=args,
-            app_port=app_port,
             stop_reason=reason
         )
 
@@ -410,28 +365,18 @@ def main():
         if not os.path.exists(args.config):
             print(f"❌ 错误: 找不到配置文件 {args.config}")
             return
-
         with open(args.config, 'r', encoding='utf-8') as f:
             config_data = yaml.safe_load(f)
-
         if config_data:
-            if "data_path" in config_data:
-                args.data_path = config_data["data_path"]
-            if "output_dir" in config_data:
-                args.output_dir = config_data["output_dir"]
-            if "max_workers" in config_data:
-                args.max_workers = config_data["max_workers"]
-
+            if "data_path" in config_data: args.data_path = config_data["data_path"]
+            if "output_dir" in config_data: args.output_dir = config_data["output_dir"]
+            if "max_workers" in config_data: args.max_workers = config_data["max_workers"]
             if "models" in config_data:
                 models_cfg = config_data["models"]
-                if "builder_model" in models_cfg:
-                    args.builder_model = models_cfg["builder_model"]
-                if "visual_copilot_model" in models_cfg:
-                    args.visual_copilot_model = models_cfg["visual_copilot_model"]
-                if "webvoyager_model" in models_cfg:
-                    args.webvoyager_model = models_cfg["webvoyager_model"]
-                if "user_model" in models_cfg:
-                    args.user_model = models_cfg["user_model"]
+                if "builder_model" in models_cfg: args.builder_model = models_cfg["builder_model"]
+                if "visual_copilot_model" in models_cfg: args.visual_copilot_model = models_cfg["visual_copilot_model"]
+                if "webvoyager_model" in models_cfg: args.webvoyager_model = models_cfg["webvoyager_model"]
+                if "user_model" in models_cfg: args.user_model = models_cfg["user_model"]
 
     if not os.path.exists(args.data_path):
         print(f"❌ 错误: 找不到数据文件 {args.data_path}")
@@ -453,17 +398,15 @@ def main():
         for task in tasks:
             futures.append(executor.submit(run_single_task, task, args))
 
-        # 进度条展示，total 是任务总数
         with tqdm(total=len(tasks), desc="Processing Tasks", unit="task") as pbar:
             for future in concurrent.futures.as_completed(futures):
                 try:
                     finished_task_id = future.result()
-                    # 使用 tqdm.write 替代 print，防止多线程打印冲刷掉进度条
                     tqdm.write(f"✅ 任务 {finished_task_id} 整体流程执行完毕。")
                 except Exception as e:
                     tqdm.write(f"❌ 任务执行期间发生未捕获异常: {e}")
                 finally:
-                    pbar.update(1)  # 任务完成（无论成功失败），进度条 +1
+                    pbar.update(1)
 
 
 if __name__ == "__main__":
