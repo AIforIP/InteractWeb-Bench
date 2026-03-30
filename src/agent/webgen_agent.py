@@ -171,7 +171,34 @@ class WebGenAgent:
                 self.is_finished = True
 
     def get_concise_messages(self):
-        return [{"role": m["role"], "content": m["content"]} for m in self.messages]
+        """获取压缩后的消息上下文，并强制限制全局图片数量，防止触发 API 400 错误"""
+        MAX_IMAGES = 3  # 安全阈值，只保留上下文中最新的 3 张图片
+        image_count = 0
+        concise_msgs = []
+
+        # 逆序遍历消息，优先保留最新的图片
+        for m in reversed(self.messages):
+            new_msg = {"role": m["role"]}
+
+            # 如果 content 是列表（可能包含文本和图片）
+            if isinstance(m["content"], list):
+                new_content = []
+                # 再次逆序遍历 content 列表中的元素
+                for item in reversed(m["content"]):
+                    if isinstance(item, dict) and item.get("type") == "image_url":
+                        if image_count < MAX_IMAGES:
+                            new_content.insert(0, item)
+                            image_count += 1
+                        # 如果图片数量已达上限，则直接丢弃该图片对象
+                    else:
+                        new_content.insert(0, item)
+                new_msg["content"] = new_content
+            else:
+                new_msg["content"] = m["content"]
+
+            concise_msgs.insert(0, new_msg)
+
+        return concise_msgs
 
     def _get_context_summary(self):
         summary_lines = ["=== CONVERSATION HISTORY (Agent & User) ==="]
