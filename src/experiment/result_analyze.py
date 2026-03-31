@@ -424,52 +424,53 @@ def analyze_batch_trajectories(root_dir, dataset_paths=None):
             for _, row in error_df.iterrows():
                 print(f"   - Task ID: {row['task_id']:<18} | Role: {row['role']:<6} | Diff: {row['difficulty']:<6}")
 
-            if dataset_paths:
-                retest_path = r"E:\Agent_work\src\data_generation\re_test1.jsonl"
-                print(f"\n🔄 正在精确提取真正的 ERROR 样例至: {retest_path}")
-                error_ids = set(error_df['task_id'].tolist())
-                extracted_count = 0
-
-                try:
-                    os.makedirs(os.path.dirname(retest_path), exist_ok=True)
-                    with open(retest_path, 'w', encoding='utf-8') as out_f:
-                        extracted_ids = set()
-                        for d_path in dataset_paths:
-                            if not os.path.exists(d_path): continue
-                            with open(d_path, 'r', encoding='utf-8') as in_f:
-                                if str(d_path).endswith('.jsonl'):
-                                    for line in in_f:
-                                        if not line.strip(): continue
-                                        item_data = json.loads(line)
-                                        t_id = str(item_data.get("id") or item_data.get("task_id"))
-                                        if t_id in error_ids and t_id not in extracted_ids:
-                                            out_f.write(line.strip() + '\n')
-                                            extracted_ids.add(t_id)
-                                            extracted_count += 1
-                                elif str(d_path).endswith('.json'):
-                                    json_data = json.load(in_f)
-                                    if isinstance(json_data, list):
-                                        for item in json_data:
-                                            t_id = str(item.get("id") or item.get("task_id"))
-                                            if t_id in error_ids and t_id not in extracted_ids:
-                                                out_f.write(json.dumps(item, ensure_ascii=False) + '\n')
-                                                extracted_ids.add(t_id)
-                                                extracted_count += 1
-                                    elif isinstance(json_data, dict):
-                                        for k, item in json_data.items():
-                                            t_id = str(k)
-                                            if t_id in error_ids and t_id not in extracted_ids:
-                                                out_f.write(json.dumps(item, ensure_ascii=False) + '\n')
-                                                extracted_ids.add(t_id)
-                                                extracted_count += 1
-                    print(f"✅ 提取成功！共精准提取了 {extracted_count} 条 ERROR 样例。")
-                except Exception as e:
-                    print(f"⚠️ 提取 re_test1.jsonl 时发生错误: {e}")
-
         if not crashed_df.empty:
             print("\n⚠️ 【CRASHED 状态】(模型写出毒代码死循环或自行崩溃，未进入打分):")
             for _, row in crashed_df.iterrows():
                 print(f"   - Task ID: {row['task_id']:<18} | Role: {row['role']:<6} | Diff: {row['difficulty']:<6}")
+
+        # 将 ERROR + CRASHED 任务提取到 logs 同级目录，方便重新跑
+        abnormal_ids = set(error_df['task_id'].tolist()) | set(crashed_df['task_id'].tolist())
+        retest_path = os.path.join(str(root_path.parent), "retest_tasks.jsonl")
+        extracted_count = 0
+
+        if dataset_paths and abnormal_ids:
+            try:
+                with open(retest_path, 'w', encoding='utf-8') as out_f:
+                    extracted_ids = set()
+                    for d_path in dataset_paths:
+                        if not os.path.exists(d_path): continue
+                        with open(d_path, 'r', encoding='utf-8') as in_f:
+                            if str(d_path).endswith('.jsonl'):
+                                for line in in_f:
+                                    if not line.strip(): continue
+                                    item_data = json.loads(line)
+                                    t_id = str(item_data.get("id") or item_data.get("task_id") or item_data.get("original_id"))
+                                    if t_id in abnormal_ids and t_id not in extracted_ids:
+                                        out_f.write(line.strip() + '\n')
+                                        extracted_ids.add(t_id)
+                                        extracted_count += 1
+                            elif str(d_path).endswith('.json'):
+                                json_data = json.load(in_f)
+                                items = json_data if isinstance(json_data, list) else list(json_data.values()) if isinstance(json_data, dict) else []
+                                for item in items:
+                                    t_id = str(item.get("id") or item.get("task_id") or item.get("original_id"))
+                                    if t_id in abnormal_ids and t_id not in extracted_ids:
+                                        out_f.write(json.dumps(item, ensure_ascii=False) + '\n')
+                                        extracted_ids.add(t_id)
+                                        extracted_count += 1
+                print(f"\n🔄 已提取 {extracted_count} 条异常任务 (ERROR+CRASHED) 至: {retest_path}")
+            except Exception as e:
+                print(f"⚠️ 提取异常任务时出错: {e}")
+        elif abnormal_ids and not dataset_paths:
+            # 没有原始数据集，直接用 task_id 写一份简单列表
+            try:
+                with open(retest_path, 'w', encoding='utf-8') as out_f:
+                    for t_id in sorted(abnormal_ids):
+                        out_f.write(json.dumps({"id": t_id}, ensure_ascii=False) + '\n')
+                print(f"\n🔄 已保存 {len(abnormal_ids)} 条异常任务 ID 至: {retest_path}")
+            except Exception as e:
+                print(f"⚠️ 保存异常任务 ID 时出错: {e}")
 
     # ---------------------------------------------------------
     # 🔬 新增：深度剖析 CRASHED 状态与行为的关联分析 🔬
