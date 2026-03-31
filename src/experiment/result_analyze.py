@@ -6,8 +6,8 @@ import numpy as np
 from pathlib import Path
 
 # 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-plt.rcParams['axes.unicode_minus'] = False
+# plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+# plt.rcParams['axes.unicode_minus'] = False
 
 # 强制难度的逻辑排序权重，保证图表和打印顺序为 Easy -> Middle -> Hard
 DIFFICULTY_ORDER = {"Easy": 1, "Middle": 2, "Hard": 3, "Unknown": 99}
@@ -558,94 +558,94 @@ def analyze_batch_trajectories(root_dir, dataset_paths=None):
     df.to_csv(output_csv, index=False, encoding='utf-8-sig')
     print(f"\n💾 明细数据已导出: {output_csv}")
 
-    # --- 可视化图表 ---
-    try:
-        plt.figure(figsize=(20, 16))
+    # # --- 可视化图表 ---
+    # try:
+    #     plt.figure(figsize=(20, 16))
 
-        plt.subplot(3, 3, 1)
-        colors_state = {'PASS': '#4CAF50', 'SUCCESS': '#4CAF50', 'FAIL': '#FFC107', 'CRASHED': '#F44336',
-                        'ERROR': '#E91E63'}
-        state_counts = df['final_state'].value_counts()
-        plot_colors_state = [colors_state.get(str(x).upper(), '#9E9E9E') for x in state_counts.index]
-        state_counts.plot(kind='pie', autopct='%1.1f%%', colors=plot_colors_state, startangle=90)
-        plt.title('Final State Distribution', fontweight='bold')
-        plt.ylabel('')
+    #     plt.subplot(3, 3, 1)
+    #     colors_state = {'PASS': '#4CAF50', 'SUCCESS': '#4CAF50', 'FAIL': '#FFC107', 'CRASHED': '#F44336',
+    #                     'ERROR': '#E91E63'}
+    #     state_counts = df['final_state'].value_counts()
+    #     plot_colors_state = [colors_state.get(str(x).upper(), '#9E9E9E') for x in state_counts.index]
+    #     state_counts.plot(kind='pie', autopct='%1.1f%%', colors=plot_colors_state, startangle=90)
+    #     plt.title('Final State Distribution', fontweight='bold')
+    #     plt.ylabel('')
 
-        plt.subplot(3, 3, 2)
-        tcr_data = df.groupby('role')[['tcr_score', 'tcr_score_no_hallu']].mean()
-        tcr_data.plot(kind='bar', ax=plt.gca(), color=['#00BCD4', '#8BC34A'], edgecolor='black')
-        plt.title('TCR Score by Persona Role', fontweight='bold')
-        plt.xlabel('Persona Role')
-        plt.ylabel('Score')
-        plt.legend(['With Hallu Penalty', 'Pure Task TCR'])
-        plt.xticks(rotation=0)
+    #     plt.subplot(3, 3, 2)
+    #     tcr_data = df.groupby('role')[['tcr_score', 'tcr_score_no_hallu']].mean()
+    #     tcr_data.plot(kind='bar', ax=plt.gca(), color=['#00BCD4', '#8BC34A'], edgecolor='black')
+    #     plt.title('TCR Score by Persona Role', fontweight='bold')
+    #     plt.xlabel('Persona Role')
+    #     plt.ylabel('Score')
+    #     plt.legend(['With Hallu Penalty', 'Pure Task TCR'])
+    #     plt.xticks(rotation=0)
 
-        plt.subplot(3, 3, 3)
-        hallu_data = df.groupby('role')['hallucination_triggered'].mean().dropna() * 100
-        if not hallu_data.empty:
-            hallu_data.plot(kind='bar', color='#E91E63', edgecolor='black')
-        plt.title('Hallucination Rate (%) by Persona Role', fontweight='bold')
-        plt.xlabel('Persona Role')
-        plt.ylabel('Rate (%)')
-        plt.xticks(rotation=0)
+    #     plt.subplot(3, 3, 3)
+    #     hallu_data = df.groupby('role')['hallucination_triggered'].mean().dropna() * 100
+    #     if not hallu_data.empty:
+    #         hallu_data.plot(kind='bar', color='#E91E63', edgecolor='black')
+    #     plt.title('Hallucination Rate (%) by Persona Role', fontweight='bold')
+    #     plt.xlabel('Persona Role')
+    #     plt.ylabel('Rate (%)')
+    #     plt.xticks(rotation=0)
 
-        plt.subplot(3, 3, 4)
-        diff_tcr_data = df.groupby('difficulty')['tcr_score_no_hallu'].mean()
-        valid_diff_indices = [d for d in ["Easy", "Middle", "Hard"] if d in diff_tcr_data.index]
-        if valid_diff_indices:
-            diff_tcr_data = diff_tcr_data.reindex(valid_diff_indices)
-        diff_tcr_data.plot(kind='bar', color='#FF9800', edgecolor='black')
-        plt.title('Pure TCR by Difficulty', fontweight='bold')
-        plt.xlabel('Difficulty')
-        plt.ylabel('Pure TCR Score')
-        plt.xticks(rotation=0)
+    #     plt.subplot(3, 3, 4)
+    #     diff_tcr_data = df.groupby('difficulty')['tcr_score_no_hallu'].mean()
+    #     valid_diff_indices = [d for d in ["Easy", "Middle", "Hard"] if d in diff_tcr_data.index]
+    #     if valid_diff_indices:
+    #         diff_tcr_data = diff_tcr_data.reindex(valid_diff_indices)
+    #     diff_tcr_data.plot(kind='bar', color='#FF9800', edgecolor='black')
+    #     plt.title('Pure TCR by Difficulty', fontweight='bold')
+    #     plt.xlabel('Difficulty')
+    #     plt.ylabel('Pure TCR Score')
+    #     plt.xticks(rotation=0)
 
-        plt.subplot(3, 3, 5)
-        if "Unknown" not in difficulties or len(difficulties) > 1:
-            pivot_tcr.plot(kind='bar', ax=plt.gca(), edgecolor='black')
-            plt.title('Pure TCR: Difficulty x Persona', fontweight='bold')
-            plt.xlabel('Difficulty')
-            plt.ylabel('Pure TCR Score')
-            plt.xticks(rotation=0)
-            plt.legend(title='Persona Role')
-        else:
-            plt.text(0.5, 0.5, 'No Difficulty Data', horizontalalignment='center', verticalalignment='center',
-                     fontsize=12)
-            plt.title('Pure TCR: Difficulty x Persona', fontweight='bold')
-            plt.axis('off')
+    #     plt.subplot(3, 3, 5)
+    #     if "Unknown" not in difficulties or len(difficulties) > 1:
+    #         pivot_tcr.plot(kind='bar', ax=plt.gca(), edgecolor='black')
+    #         plt.title('Pure TCR: Difficulty x Persona', fontweight='bold')
+    #         plt.xlabel('Difficulty')
+    #         plt.ylabel('Pure TCR Score')
+    #         plt.xticks(rotation=0)
+    #         plt.legend(title='Persona Role')
+    #     else:
+    #         plt.text(0.5, 0.5, 'No Difficulty Data', horizontalalignment='center', verticalalignment='center',
+    #                  fontsize=12)
+    #         plt.title('Pure TCR: Difficulty x Persona', fontweight='bold')
+    #         plt.axis('off')
 
-        plt.subplot(3, 3, 6)
-        colors_term = {'主动提交 (Submit)': '#4CAF50', '死循环 (Infinite Loop)': '#FF9800',
-                       '用尽次数 (Max Turns)': '#2196F3', '异常崩溃 (Crashed/Error)': '#F44336',
-                       '意外中断 (Interrupted)': '#9C27B0'}
-        term_counts = df['termination_type'].value_counts()
-        plot_colors_term = [colors_term.get(str(x), '#9E9E9E') for x in term_counts.index]
-        term_counts.plot(kind='pie', autopct='%1.1f%%', colors=plot_colors_term, startangle=90)
-        plt.title('Task Termination Reasons', fontweight='bold')
-        plt.ylabel('')
+    #     plt.subplot(3, 3, 6)
+    #     colors_term = {'主动提交 (Submit)': '#4CAF50', '死循环 (Infinite Loop)': '#FF9800',
+    #                    '用尽次数 (Max Turns)': '#2196F3', '异常崩溃 (Crashed/Error)': '#F44336',
+    #                    '意外中断 (Interrupted)': '#9C27B0'}
+    #     term_counts = df['termination_type'].value_counts()
+    #     plot_colors_term = [colors_term.get(str(x), '#9E9E9E') for x in term_counts.index]
+    #     term_counts.plot(kind='pie', autopct='%1.1f%%', colors=plot_colors_term, startangle=90)
+    #     plt.title('Task Termination Reasons', fontweight='bold')
+    #     plt.ylabel('')
 
-        # ---------------------------------------------------------
-        # 🌟 新增的第 7 个图表：主动提交 vs 非主动提交 分数对比
-        # ---------------------------------------------------------
-        plt.subplot(3, 3, 7)
-        submit_compare_df = pd.DataFrame({
-            'With Hallu Penalty': [submit_df['tcr_score'].mean() if not submit_df.empty else 0,
-                                   non_submit_df['tcr_score'].mean() if not non_submit_df.empty else 0],
-            'Pure Task TCR': [submit_df['tcr_score_no_hallu'].mean() if not submit_df.empty else 0,
-                              non_submit_df['tcr_score_no_hallu'].mean() if not non_submit_df.empty else 0]
-        }, index=['Proactive Submit', 'Non-Submit'])
+    #     # ---------------------------------------------------------
+    #     # 🌟 新增的第 7 个图表：主动提交 vs 非主动提交 分数对比
+    #     # ---------------------------------------------------------
+    #     plt.subplot(3, 3, 7)
+    #     submit_compare_df = pd.DataFrame({
+    #         'With Hallu Penalty': [submit_df['tcr_score'].mean() if not submit_df.empty else 0,
+    #                                non_submit_df['tcr_score'].mean() if not non_submit_df.empty else 0],
+    #         'Pure Task TCR': [submit_df['tcr_score_no_hallu'].mean() if not submit_df.empty else 0,
+    #                           non_submit_df['tcr_score_no_hallu'].mean() if not non_submit_df.empty else 0]
+    #     }, index=['Proactive Submit', 'Non-Submit'])
 
-        submit_compare_df.plot(kind='bar', ax=plt.gca(), color=['#00BCD4', '#8BC34A'], edgecolor='black')
-        plt.title('TCR Score: Submit vs Non-Submit', fontweight='bold')
-        plt.ylabel('Average Score')
-        plt.xticks(rotation=0)
+    #     submit_compare_df.plot(kind='bar', ax=plt.gca(), color=['#00BCD4', '#8BC34A'], edgecolor='black')
+    #     plt.title('TCR Score: Submit vs Non-Submit', fontweight='bold')
+    #     plt.ylabel('Average Score')
+    #     plt.xticks(rotation=0)
 
-        plt.tight_layout()
-        img_name = f"{root_path.name}_roles_analysis_report.png"
-        plt.savefig(img_name, dpi=300)
-        print(f"\n 升级版 九宫格全景可视化图表已生成: {img_name}")
-    except Exception as e:
-        print(f" 绘图时出现问题: {e}")
+    #     plt.tight_layout()
+    #     img_name = f"{root_path.name}_roles_analysis_report.png"
+    #     plt.savefig(img_name, dpi=300)
+    #     print(f"\n 升级版 九宫格全景可视化图表已生成: {img_name}")
+    # except Exception as e:
+    #     print(f" 绘图时出现问题: {e}")
 
 
 if __name__ == "__main__":
