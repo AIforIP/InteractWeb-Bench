@@ -649,35 +649,31 @@ def analyze_batch_trajectories(root_dir, dataset_paths=None):
 
 
 if __name__ == "__main__":
-    TARGET_DIR = r"E:\Agent_work\src\experiment_results\gpt-4o-mini\logs"
+    import argparse
 
-    # =========================================================
-    # 💡 终极防翻车：智能文件路径寻址
-    # 自动探测加了 _simulation_labeled 后缀或者没加后缀的文件
-    # =========================================================
-    BASE_DIR = r"E:\Agent_work\src\data_generation"
+    parser = argparse.ArgumentParser(description="Analyze InteractWeb-Bench experiment results.")
+    parser.add_argument("--dir", type=str, required=True, help="Path to the logs directory")
+    parser.add_argument("--data", type=str, default=None, help="Path to the dataset directory (optional)")
+    args = parser.parse_args()
+
+    # 自动从 --data 目录或 logs 目录同级的 data/ 目录寻找数据集
+    data_dir = args.data or os.path.join(os.path.dirname(os.path.abspath(args.dir)), "..", "data")
+    data_dir = os.path.abspath(data_dir)
 
     potential_files = [
         "low_scores_simulation_labeled.jsonl",
         "mid_scores_simulation_labeled.jsonl",
-        "high_scores_simulation_labeled.jsonl"
+        "high_scores_simulation_labeled.jsonl",
+        "test_mini.jsonl",
     ]
 
-    DATASET_FILES = []
+    dataset_files = []
     for pf in potential_files:
-        path_with_suffix = os.path.join(BASE_DIR, pf)
-        path_without_suffix = os.path.join(BASE_DIR, pf.replace("_simulation_labeled", ""))
+        path = os.path.join(data_dir, pf)
+        if os.path.exists(path):
+            dataset_files.append(path)
 
-        # 智能匹配
-        if os.path.exists(path_with_suffix):
-            DATASET_FILES.append(path_with_suffix)
-        elif os.path.exists(path_without_suffix):
-            DATASET_FILES.append(path_without_suffix)
-        else:
-            # 如果都不存在，就原样塞进去，让代码去报黄字警告
-            DATASET_FILES.append(path_with_suffix)
-
-    if os.path.exists(TARGET_DIR):
-        analyze_batch_trajectories(TARGET_DIR, dataset_paths=DATASET_FILES)
+    if not os.path.exists(args.dir):
+        print(f"❌ 找不到日志目录: {args.dir}")
     else:
-        print(f"❌ 找不到日志目录: {TARGET_DIR}")
+        analyze_batch_trajectories(args.dir, dataset_paths=dataset_files or None)
