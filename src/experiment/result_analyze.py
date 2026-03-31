@@ -554,9 +554,9 @@ def analyze_batch_trajectories(root_dir, dataset_paths=None):
         global_violating_mean = normal_df['violating_chitchat_count'].mean()
         print(f" [4] 全局平均格式违规: {global_violating_mean:.2f} 次")
 
-    output_csv = f"{root_path.name}_summary_with_roles.csv"
-    df.to_csv(output_csv, index=False, encoding='utf-8-sig')
-    print(f"\n💾 明细数据已导出: {output_csv}")
+        output_csv = os.path.join(str(root_path.parent), f"{root_path.name}_summary_with_roles.csv")
+        df.to_csv(output_csv, index=False, encoding='utf-8-sig')
+        print(f"\n💾 明细数据已导出: {output_csv}")
 
     # # --- 可视化图表 ---
     # try:
