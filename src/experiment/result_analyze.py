@@ -432,7 +432,37 @@ def analyze_batch_trajectories(root_dir, dataset_paths=None):
         # 将 ERROR + CRASHED 任务提取到 logs 同级目录，方便重新跑
         abnormal_ids = set(error_df['task_id'].tolist()) | set(crashed_df['task_id'].tolist())
         retest_path = os.path.join(str(root_path.parent), "retest_tasks.jsonl")
+        error_logs_dir = os.path.join(str(root_path.parent), "error_logs")
         extracted_count = 0
+
+        # 复制异常任务的 logs 子目录到 error_logs/
+        import shutil
+        copied_count = 0
+        error_logs_dir = os.path.join(str(root_path.parent), "error_logs")
+        error_workspaces_dir = os.path.join(str(root_path.parent), "error_workspaces")
+        # 推断 workspaces 目录（与 logs 同级，名为 workspaces）
+        workspaces_root = os.path.join(str(root_path.parent), "workspaces")
+        if abnormal_ids:
+            os.makedirs(error_logs_dir, exist_ok=True)
+            os.makedirs(error_workspaces_dir, exist_ok=True)
+            for task_id in sorted(abnormal_ids):
+                # 复制 logs
+                src_log = os.path.join(str(root_path), task_id)
+                dst_log = os.path.join(error_logs_dir, task_id)
+                if os.path.exists(src_log):
+                    if os.path.exists(dst_log):
+                        shutil.rmtree(dst_log)
+                    shutil.copytree(src_log, dst_log)
+                    copied_count += 1
+                # 复制 workspaces
+                src_ws = os.path.join(workspaces_root, task_id)
+                dst_ws = os.path.join(error_workspaces_dir, task_id)
+                if os.path.exists(src_ws):
+                    if os.path.exists(dst_ws):
+                        shutil.rmtree(dst_ws)
+                    shutil.copytree(src_ws, dst_ws)
+            print(f"\n📂 已复制 {copied_count} 个异常任务 logs 至: {error_logs_dir}")
+            print(f"📂 已复制对应 workspaces 至: {error_workspaces_dir}")
 
         if dataset_paths and abnormal_ids:
             try:
