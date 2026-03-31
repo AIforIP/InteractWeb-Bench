@@ -664,7 +664,6 @@ if __name__ == "__main__":
         "low_scores_simulation_labeled.jsonl",
         "mid_scores_simulation_labeled.jsonl",
         "high_scores_simulation_labeled.jsonl",
-        "test_mini.jsonl",
     ]
 
     dataset_files = []
