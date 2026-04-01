@@ -17,7 +17,7 @@ if not api_key:
     raise ValueError("API Key not found! Please set OPENAILIKE_API_KEY or OPENAI_API_KEY in .env")
 
 # 使用 httpx 自定义客户端，增加超时时间和底层重试
-robust_timeout = 900
+robust_timeout = 1800
 robust_transport = httpx.HTTPTransport(retries=3)
 
 http_client = httpx.Client(
@@ -72,14 +72,40 @@ def get_local_client(model_name: str):
     return None
 
 
+# 需要强制使用流式传输的模型列表
+STREAMING_MODELS = {
+    "kimi-k2.5",
+    "qwen3.5-397b-a17b",
+}
+
+
+def _is_streaming_model(model: str) -> bool:
+    """判断当前模型是否需要流式传输。"""
+    return model.lower() in STREAMING_MODELS
+
+
+def _call_with_stream(api_client, params: dict) -> str:
+    """使用流式传输调用并拼接完整响应。"""
+    full_content = []
+    with api_client.chat.completions.create(**params, stream=True) as stream:
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                print(delta.content, end="", flush=True)
+                full_content.append(delta.content)
+    return "".join(full_content)
+
+
 def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, temperature=0.5):
     """
     Generate text using LLM with robust retry logic.
+    For kimi-k2.5 and qwen3.5-397b-a17b, streaming is used automatically.
     """
 
     # 定义重试参数
     max_retries = 5
     base_delay = 2  # 基础等待时间 2 秒
+    use_stream = _is_streaming_model(model)
 
     for attempt in range(max_retries):
         try:
@@ -102,15 +128,14 @@ def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, tem
             # 3. 发起调用 (动态路由)
             # -----------------------------------------------------------------
             local_client = get_local_client(model)
+            active_client = local_client if local_client else client
 
-            if local_client:
-                # 命中本地白名单，调用本地 vLLM 接口
-                chat_response = local_client.chat.completions.create(**params)
+            if use_stream:
+                # 流式传输：拼接所有 chunk 得到完整内容
+                return _call_with_stream(active_client, params)
             else:
-                # 走正常的云端 API
-                chat_response = client.chat.completions.create(**params)
-
-            return chat_response.choices[0].message.content
+                chat_response = active_client.chat.completions.create(**params)
+                return chat_response.choices[0].message.content
 
         except (APIConnectionError, APITimeoutError, RateLimitError, httpx.ConnectError) as e:
             # -----------------------------------------------------------------
