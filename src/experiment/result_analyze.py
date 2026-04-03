@@ -6,8 +6,10 @@ import numpy as np
 from pathlib import Path
 
 # 设置中文字体
-# plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-# plt.rcParams['axes.unicode_minus'] = False
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
+
 
 # 强制难度的逻辑排序权重，保证图表和打印顺序为 Easy -> Middle -> Hard
 DIFFICULTY_ORDER = {"Easy": 1, "Middle": 2, "Hard": 3, "Unknown": 99}
@@ -683,13 +685,15 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Analyze InteractWeb-Bench experiment results.")
-    parser.add_argument("--dir", type=str, required=True, help="Path to the logs directory")
-    parser.add_argument("--data", type=str, default=None, help="Path to the dataset directory (optional)")
+    # 保留 GitHub 的参数解析逻辑
+    parser.add_argument("--dir", type=str, default="/home/hhr/home/experiment_results/gpt-4.1/logs",
+                        help="Path to the logs directory")
+    parser.add_argument("--data", type=str, default="/home/hhr/home/data",
+                        help="Path to the dataset directory (optional)")
     args = parser.parse_args()
 
-    # 自动从 --data 目录或 logs 目录同级的 data/ 目录寻找数据集
-    data_dir = args.data or os.path.join(os.path.dirname(os.path.abspath(args.dir)), "..", "data")
-    data_dir = os.path.abspath(data_dir)
+    # 逻辑处理：优先用参数，没参数用你默认的路径
+    data_dir = args.data
 
     potential_files = [
         "low_scores_simulation_labeled.jsonl",
