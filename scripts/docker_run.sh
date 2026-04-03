@@ -1,7 +1,7 @@
 PROJECT_PATH="/data/shared/users/wangqiyao/InteractWeb-Bench"
 
 docker run -it --rm \
-  --name interactweb_test-qwen3.5-397b-a17b-high \
+  --name interactweb_test-gemma-4-31-3 \
   --network host \
   -v "${PROJECT_PATH}/src:/app/src" \
   -v "${PROJECT_PATH}/scripts:/app/scripts" \

@@ -76,6 +76,7 @@ def get_local_client(model_name: str):
 STREAMING_MODELS = {
     "kimi-k2.5",
     "qwen3.5-397b-a17b",
+    "gpt-5.2"
 }
 
 
