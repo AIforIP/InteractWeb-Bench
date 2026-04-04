@@ -13,12 +13,12 @@ from anthropic import Anthropic, APIConnectionError as AnthropicConnectionError
 
 load_dotenv()
 
-# ── 配置更加健壮的 HTTP 客户端 (核心修复点) ──────────────────────────────────────
+# ── 配置更加健壮的 HTTP 客户端 ──────────────────────────────────────
 # 1. 增加 timeout 和 底层 transport 重试
 robust_transport = httpx.HTTPTransport(retries=3)
-robust_timeout = 900.0
+robust_timeout = 1800.0  # 参考 llm_generation 提升至 1800s
 
-# 2. 初始化 OpenAI 客户端 (带重试)
+# 2. 初始化 OpenAI 客户端 (全局兜底客户端)
 openai_base_url = os.environ.get("OPENAILIKE_VLM_BASE_URL") or os.environ.get("OPENAILIKE_BASE_URL") or os.environ.get(
     "OPENAI_BASE_URL")
 openai_api_key = os.environ.get("OPENAILIKE_VLM_API_KEY") or os.environ.get("OPENAILIKE_API_KEY") or os.environ.get(
@@ -33,9 +33,9 @@ openai_client = OpenAI(
         timeout=robust_timeout,
         transport=robust_transport
     )
-)
+) if openai_api_key else None
 
-# 3. 初始化 Anthropic 客户端 (带重试)
+# 3. 初始化 Anthropic 客户端 (全局兜底客户端)
 anthropic_api_key = os.environ.get("ANTHROPIC_VLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
 anthropic_base_url = os.environ.get("ANTHROPIC_VLM_BASE_URL") or "https://api.anthropic.com/v1"
 
@@ -56,37 +56,47 @@ def get_local_client(model_name: str):
     根据 .env 中的 LOCAL_MODELS_MAP 配置，动态判断当前模型是否为本地部署。
     支持本地模型与 API 模型的完美混用。
     """
-    # 1. 从环境变量获取映射字符串
-    # 例: "Qwen3.5-9B=http://localhost:8024/v1,llama3=http://localhost:8025/v1"
-    mapping_str = os.environ.get("LOCAL_MODELS_MAP", "")
-    if not mapping_str.strip():
+    raw_map = os.environ.get("LOCAL_MODELS_MAP", "")
+    if not raw_map.strip():
         return None
 
-    # 2. 解析为字典 (将模型名转为小写以实现忽略大小写的匹配)
+    # 🌟 核心修复：自动展开 ${LOCAL_NODE_1_PORT} 这类嵌套的环境变量
+    mapping_str = os.path.expandvars(raw_map)
+
     local_route_dict = {}
     for item in mapping_str.split(","):
         if "=" in item:
             m_name, m_url = item.split("=", 1)
             local_route_dict[m_name.strip().lower()] = m_url.strip()
 
-    # 3. 检查当前模型是否在本地白名单中
     model_lower = model_name.lower()
     if model_lower in local_route_dict:
         local_base_url = local_route_dict[model_lower]
-        # 如果命中，返回一个指向本地端口的独立 Client
         return OpenAI(
-            api_key="EMPTY",  # 本地 vLLM 不需要真实 Key
+            api_key="EMPTY",
             base_url=local_base_url,
             http_client=httpx.Client(
                 base_url=local_base_url,
                 follow_redirects=True,
-                timeout=robust_timeout,  # 使用文件顶部定义好的健壮 timeout
-                transport=robust_transport  # 使用文件顶部定义好的健壮 transport
+                timeout=robust_timeout,
+                transport=robust_transport
             )
         )
-
-    # 4. 如果不在列表中，返回 None，外层代码会自动使用配置了云端 API_KEY 的主 Client
     return None
+
+
+# ── 新增：流式打字机辅助函数 ──────────────────────────────────────────────────
+def _call_with_stream(api_client, params: dict) -> str:
+    """使用流式传输调用并拼接完整响应。"""
+    full_content = []
+    with api_client.chat.completions.create(**params, stream=True) as stream:
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                print(delta.content, end="", flush=True)
+                full_content.append(delta.content)
+    print() # 换行
+    return "".join(full_content)
 
 
 # ── Helper: 图片编码 ──────────────────────────────────────────────────────────
@@ -121,7 +131,6 @@ def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]
             continue
 
         new_msg: dict = {"role": role, "content": []}
-
         if isinstance(msg["content"], str):
             new_msg["content"].append({"type": "text", "text": msg["content"]})
             converted.append(new_msg)
@@ -136,9 +145,8 @@ def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]
                     media_prefix, b64_data = url.split(";base64,", maxsplit=1)
                     media_type = _detect_media_type(b64_data, fallback=media_prefix.replace("data:", ""))
                 else:
-                    # 处理普通 URL 或其他情况
                     media_type = "image/jpeg"
-                    b64_data = ""  # Anthropic API 不直接支持 image_url URL，通常需要 base64
+                    b64_data = ""
 
                 new_msg["content"].append({
                     "type": "image",
@@ -152,61 +160,91 @@ def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]
     return system_text, converted
 
 
-# ── Unified generation function (带自动重试) ───────────────────────────────────
-def vlm_generation(messages: list[dict], model: str, **kwargs) -> str:
+# ── Unified generation function (带增强版自动重试与动态密钥路由) ───────────────────────────────────
+def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completion_tokens=-1, temperature=0.5,
+                   base_url=None, api_key=None, stream=False, use_anthropic_sdk=False, **kwargs) -> str:
     """
     Route the request to Anthropic or OpenAI depending on `model`.
-    Includes robust retry logic for network stability.
+    Includes robust retry logic and supports dynamic isolated credentials.
     """
     max_retries = 5
     base_delay = 2
 
-    # 判断是否使用 Anthropic
-    is_anthropic = any(tag in model.lower() for tag in ("anthropic", "claude"))
-
     for attempt in range(max_retries):
         try:
-            # ── Branch A: Anthropic ──
-            if is_anthropic:
-                if not anthropic_client:
-                    raise ValueError("Anthropic API Key not set but Anthropic model requested.")
+            # ── 构造公共参数 ──
+            params = {"model": model, "temperature": temperature}
+            params.update(kwargs)
+
+            # ── Branch A: Anthropic 专属逻辑 (需要手动设置为 True 才执行) ──
+            if use_anthropic_sdk:
+                # 🌟 动态选择 Anthropic Client
+                if base_url and api_key:
+                    active_anthropic_client = Anthropic(
+                        api_key=api_key,
+                        base_url=base_url,
+                        http_client=httpx.Client(timeout=robust_timeout, transport=robust_transport)
+                    )
+                else:
+                    active_anthropic_client = anthropic_client
+
+                if not active_anthropic_client:
+                    raise ValueError("Anthropic API Key not set but Anthropic SDK requested.")
 
                 system_text, claude_msgs = _convert_to_anthropic(messages)
-                response = anthropic_client.messages.create(
+
+                final_max_tokens = max_completion_tokens if max_completion_tokens > 0 else (
+                    max_tokens if max_tokens > 0 else 4096)
+
+                # Anthropic 暂不支持简单的 stream 展开，维持常规输出
+                response = active_anthropic_client.messages.create(
                     model=model,
                     system=system_text,
                     messages=claude_msgs,
-                    max_tokens=kwargs.pop("max_tokens", 4096),
-                    **kwargs,
+                    max_tokens=final_max_tokens,
+                    temperature=temperature,
                 )
                 return response.content[0].text
 
-            # ── Branch B: OpenAI-Compatible (默认) ──
-            # VLM 调用通常需要较大的 max_tokens
-            if "max_tokens" not in kwargs:
-                kwargs["max_tokens"] = 1000
+            # ── Branch B: OpenAI-Compatible (默认分支，包含动态路由和代理中转) ──
+            if max_completion_tokens > 0:
+                params["max_completion_tokens"] = max_completion_tokens
+            elif max_tokens > 0:
+                params["max_tokens"] = max_tokens
+            else:
+                params["max_tokens"] = 1000
 
-            # 检查是否为配置在本地白名单中的模型
+            params["messages"] = messages
+
+            # 🌟 动态路由策略 (最高优先级: Local配置 > 显式传参 > 全局兜底)
             local_client = get_local_client(model)
 
             if local_client:
-                # 走本地 vLLM 服务
-                chat_response = local_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    **kwargs,
+                active_client = local_client
+            elif base_url and api_key:
+                # 传入了特定的 URL 和 Key，临时创建一个专属的 client
+                active_client = OpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    http_client=httpx.Client(
+                        base_url=base_url,
+                        follow_redirects=True,
+                        timeout=robust_timeout,
+                        transport=robust_transport
+                    )
                 )
             else:
-                # 走云端 API
-                chat_response = openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    **kwargs,
-                )
+                active_client = openai_client
+                if not active_client:
+                    raise ValueError("OpenAI client not initialized. Missing API Key.")
 
-            return chat_response.choices[0].message.content
+            # 🌟 核心：流式与非流式请求分支
+            if stream:
+                return _call_with_stream(active_client, params)
+            else:
+                chat_response = active_client.chat.completions.create(**params)
+                return chat_response.choices[0].message.content
 
-        # ── 错误捕获与重试逻辑 ──
         except (APIConnectionError, APITimeoutError, RateLimitError, httpx.ConnectError, AnthropicConnectionError) as e:
             print(f"\033[93m[Warn] VLM Network Error (Attempt {attempt + 1}/{max_retries}): {e}\033[0m")
 
@@ -227,27 +265,17 @@ from PIL import Image
 import io
 
 
-# [新增] 带压缩的图片编码函数
 def compress_and_encode_image(image_path, max_size=(800, 800), quality=70):
     """
     压缩图片并转为 Base64。
-    - max_size: 最大宽高，超过会等比缩放。
-    - quality: JPEG 压缩质量 (1-100)，越低越模糊但 Token 越少。
     """
     try:
         with Image.open(image_path) as img:
-            # 1. 转换格式 (PNG -> RGB for JPEG)
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
-
-            # 2. 调整尺寸 (保持比例)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-
-            # 3. 压缩并转为 Bytes
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=quality)
-
-            # 4. 转 Base64
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
     except Exception as e:
         print(f"Image compression failed: {e}. Falling back to raw encoding.")

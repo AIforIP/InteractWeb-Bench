@@ -35,21 +35,38 @@ cp .env.example .env
 2. **编辑 `.env` 文件**，填入你的 API 信息：
 
 ```text
-# LLM 基础配置
+# 1. 定义底层计算节点端口 (代表服务器上启动的独立 vLLM 实例)
+LOCAL_NODE_1_PORT=8024
+LOCAL_NODE_2_PORT=8025
+
+# 2. 动态路由映射表 (将具体的模型名指向对应的计算节点)
+LOCAL_MODELS_MAP="Qwen3-VL-2B-Thinking=http://localhost:${LOCAL_NODE_1_PORT}/v1,Qwen3.5-9B=http://localhost:${LOCAL_NODE_2_PORT}/v1"
+
+# ====== 兜底大锅饭配置 (Fallback) ======
 OPENAILIKE_API_KEY="your_key"
 OPENAILIKE_BASE_URL="api_url"
 
-# VLM 配置
 OPENAILIKE_VLM_API_KEY="your_key"
 OPENAILIKE_VLM_BASE_URL="api_url"
 
-# 反馈模型配置
-OPENAILIKE_FB_API_KEY="your_key"
-OPENAILIKE_FB_BASE_URL="api_url"
-
-# Anthropic 视觉模型配置 (可选)
 ANTHROPIC_VLM_API_KEY="your_key"
 ANTHROPIC_VLM_BASE_URL="api_url"
+#独立配置不用请注释掉
+# ====== 1. Builder (写代码) 独立配置 ======
+BUILDER_API_KEY="your_builder_key"
+BUILDER_BASE_URL="builder_api_url"
+
+# ====== 2. Visual Copilot (看图改Bug) 独立配置 ======
+COPILOT_API_KEY="your_copilot_key"
+COPILOT_BASE_URL="copilot_api_url"
+
+# ====== 3. WebVoyager (最终打分) 独立配置 ======
+WEBVOYAGER_API_KEY="your_key"
+WEBVOYAGER_BASE_URL="api_url"
+
+# ====== 4. UserSimulator (模拟甲方) 独立配置 ======
+USER_MODEL_API_KEY="your_key"
+USER_MODEL_BASE_URL="api_url"
 ```
 
 ### 3. 修改配置文件 (config.yaml)：
@@ -76,7 +93,7 @@ pip install vllm
 # 自动清理 8024 端口，防止启动冲突
 fuser -k 8024/tcp >/dev/null 2>&1
 
-MODEL_PATH="/home/hhr/home/hhr/models/Qwen3-VL-2B-Thinking"
+MODEL_PATH="/your_model_address/"
 
 # 使用 Python 模块的绝对路径启动
 python -m vllm.entrypoints.openai.api_server \
@@ -86,7 +103,7 @@ python -m vllm.entrypoints.openai.api_server \
     --host 0.0.0.0 \
     --trust-remote-code \
     --dtype bfloat16 \
-    --max-model-len 16384 \
+    --max-model-len 128000 \
     --limit-mm-per-prompt '{"image": 5}' \
     --gpu-memory-utilization 0.7 \
     --enforce-eager
@@ -97,9 +114,7 @@ python -m vllm.entrypoints.openai.api_server \
 方式一：纯云端模型调用，直接运行主程序：
 ```bash
 # 确保你当前处于项目根目录下
-python src/experiment/run_simulation.py
-# 后台运行方式
-nohup python src/experiment/run_simulation.py > run_simulation.log 2>&1 &
+python src/experiment/run_simulation.py --config /your_config_address/
 ```
 方式二：使用本地模型 (双终端模式)，需要打开两个终端窗口，均激活环境并进入项目根目录：
 终端 1（启动本地大模型服务）：
@@ -116,14 +131,12 @@ python src/experiment/run_simulation.py
 ```bash
 docker load -i interactweb-bench_v1.0.tar
 ```
-运行评测容器
+配置运行容器
 ```bash
-docker run -it --rm \
-  --name interactweb_test \
-  --network host \
-  -v /宿主机绝对路径/data:/app/data \
-  -v /宿主机绝对路径/experiment_results:/app/experiment_results \
-  -v /宿主机绝对路径/.env:/app/.env \
-  -v /宿主机绝对路径/config.yaml:/app/config.yaml \
-  interactweb-bench:v1.0
+docker_run.sh
+```
+进入docker后激活环境后按照
+```bash
+# 确保你当前处于项目根目录(InteractWeb-Bench)下
+python src/experiment/run_simulation.py --config /your_config_address/
 ```

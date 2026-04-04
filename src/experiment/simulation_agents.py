@@ -64,12 +64,16 @@ Reply directly with your answer in English. Do not output your internal thinking
 
 class UserSimulator:
     def __init__(self, ground_truth_instruction, initial_instruction, evaluation_checklist, persona="P-MIN",
-                 model="gpt-4o", vlm_model="gpt-4o"):
+                 model="gpt-4o", vlm_model="gpt-4o", base_url=None, api_key=None):  # 🌟 新增专属配置参数
         self.ground_truth_instruction = ground_truth_instruction
         self.evaluation_checklist = evaluation_checklist
         self.persona = persona
         self.model = model
         self.vlm_model = vlm_model
+
+        # 🌟 挂载专属路由和密钥
+        self.base_url = base_url
+        self.api_key = api_key
 
         # 记忆系统初始化：将批量生成的初始指令 (L1) 作为第一条发出的消息记录下来
         self.conversation_history = [
@@ -97,11 +101,13 @@ class UserSimulator:
         current_question_msg = {"role": "user", "content": f"The Developer asks: \"{question}\""}
         messages.append(current_question_msg)
 
-        # 3. 调用大模型生成回答
+        # 3. 🌟 调用大模型生成回答 (透传专属路由配置)
         response = llm_generation(
             messages=messages,
             model=self.model,
-            temperature=0.4
+            temperature=0.4,
+            base_url=self.base_url,  # 透传专属 URL
+            api_key=self.api_key  # 透传专属 Key
         )
         answer = response.strip()
 

@@ -162,11 +162,14 @@ def perform_final_evaluation(builder, user_sim, workspace_dir, log_dir, oracle_s
             shutil.rmtree(eval_download_dir, ignore_errors=True)
             os.makedirs(eval_download_dir, exist_ok=True)
 
-            # 获取动态 VLM 路由和 API Key
+            # 获取动态 VLM 路由和 API Key (优先使用专属环境变量)
             target_model = args.webvoyager_model
-            assigned_vlm_url = get_vlm_endpoint(target_model)
-            api_key = os.environ.get(
-                "OPENAILIKE_VLM_API_KEY") if "chatanywhere" in assigned_vlm_url else "sk-local-test"
+            assigned_vlm_url = os.environ.get("WEBVOYAGER_BASE_URL") or get_vlm_endpoint(target_model)
+
+            api_key = os.environ.get("WEBVOYAGER_API_KEY")
+            if not api_key:
+                api_key = os.environ.get(
+                    "OPENAILIKE_VLM_API_KEY") if "chatanywhere" in assigned_vlm_url else "sk-local-test"
 
             wv_args_dict = {
                 "output_dir": eval_log_dir,
@@ -276,6 +279,16 @@ def run_single_task(task, args):
 
     tqdm.write(f"\n==== Task {task_id} [{difficulty.upper()}] 开始运行 (动态日志嗅探模式) ====")
 
+    # =========================================================================
+    # 🌟 提取 Builder 的专属配置
+    builder_url = os.environ.get("BUILDER_BASE_URL") or get_vlm_endpoint(args.builder_model)
+    builder_key = os.environ.get("BUILDER_API_KEY") or os.environ.get("OPENAILIKE_API_KEY")
+
+    # 🌟 提取 Visual Copilot 的专属配置
+    copilot_url = os.environ.get("COPILOT_BASE_URL") or get_vlm_endpoint(args.visual_copilot_model)
+    copilot_key = os.environ.get("COPILOT_API_KEY") or os.environ.get("OPENAILIKE_VLM_API_KEY") or os.environ.get("OPENAILIKE_API_KEY")
+    # =========================================================================
+
     builder = WebGenAgent(
         model=args.builder_model,
         vlm_model=args.visual_copilot_model,
@@ -287,14 +300,28 @@ def run_single_task(task, args):
         overwrite=args.overwrite,
         error_limit=error_limit,
         difficulty=difficulty,
-        max_simulation_steps=MAX_SIMULATION_STEPS
+        max_simulation_steps=MAX_SIMULATION_STEPS,
+        max_tokens=64000,
+        # 🌟 注入 WebGenAgent 专属配置
+        builder_url=builder_url,
+        builder_key=builder_key,
+        vlm_url=copilot_url,
+        vlm_key=copilot_key
     )
+
+    # 提取 User Model 的专属配置
+    user_model_url = os.environ.get("USER_MODEL_BASE_URL") or get_vlm_endpoint(args.user_model)
+    user_model_key = os.environ.get("USER_MODEL_API_KEY") or os.environ.get("OPENAILIKE_VLM_API_KEY", "sk-local-test")
 
     user_sim = UserSimulator(
         ground_truth_instruction=task.get("ground_truth_instruction", user_instruction),
         initial_instruction=user_instruction,
         evaluation_checklist=task.get("evaluation_checklist", []),
-        persona=persona, model=args.user_model, vlm_model=args.webvoyager_model
+        persona=persona,
+        model=args.user_model,
+        vlm_model=args.webvoyager_model,
+        base_url=user_model_url,
+        api_key=user_model_key
     )
 
     turn_counter = 0

@@ -1,19 +1,35 @@
-/*
-!config.yaml
+# 1. 忽略所有敏感和缓存文件
+.env
+__pycache__/
+**/__pycache__/
+node_modules/
+**/node_modules/
+
+# 2. 忽略你认为“没用”的图片和分析报表
+*.png
+*.csv
+experiment/*.png
+experiment/*.csv
+
+# 3. 数据文件夹管理 (精准过滤)
+# 先忽略大的、无用的数据文件
+data/all.jsonl
+data/half*.jsonl
+
+# 4. 排除 src 下的实验生成目录
+src/data_generation/
+src/experiment_results/
+src/standalone_visual_logs/
+
+# 5. 特殊保留 (如果你的根目录下有 /* 这种全局忽略，才需要下面的感叹号)
+!config*.yaml
 !README.md
 !.gitignore
 !.env.example
 !src/
-.env
 !data/
 !scripts/
 !Dockerfile
-# 之前 src 里的排除规则
-src/data_generation/
-src/experiment_results/
-src/standalone_visual_logs/
-src/node_modules/
-
-# Python cache
-__pycache__/
-**/__pycache__/
+# 确保保留你需要的测试和分片数据
+!data/test_mini.jsonl
+!data/part*.jsonl

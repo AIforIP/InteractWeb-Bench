@@ -109,10 +109,18 @@ def remove_dir(directory):
 class WebGenAgent:
     def __init__(self, model, vlm_model, fb_model, workspace_dir, log_dir, instruction, max_iter, overwrite,
                  error_limit, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, custom_system_prompt=None,
-                 difficulty="middle", max_simulation_steps=15):
+                 difficulty="middle", max_simulation_steps=15,
+                 builder_url=None, builder_key=None, vlm_url=None, vlm_key=None):  # 🌟 1. 注入 4 个专属凭证参数
         self.model = model
         self.vlm_model = vlm_model
-        self.fb_model = fb_model
+        self.fb_model = fb_model  # (历史遗留参数，实际底层由 UserSimulator 代理)
+
+        # 🌟 挂载凭证
+        self.builder_url = builder_url
+        self.builder_key = builder_key
+        self.vlm_url = vlm_url
+        self.vlm_key = vlm_key
+
         self.workspace_dir = workspace_dir
         self.log_dir = log_dir
         self.instruction = instruction
@@ -269,18 +277,22 @@ class WebGenAgent:
 
         print(f"\033[95m[Agent]: Audit Goal -> {criteria[:100]}...\033[0m")
 
-        # 🌟 随机分配首选端口，让 Vite 优先使用，避免并行任务都在抢 5173
         preferred_port = find_free_port()
         dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
 
-        # 🌟 修改 1：在实例化 BrowserEnv 时，下放指令、模型和调用函数
+        # 🌟 2. 闭包包装器：防止 BrowserEnv 内部调用丢失凭证
+        def isolated_llm_caller(*args, **kwargs):
+            kwargs['base_url'] = self.builder_url
+            kwargs['api_key'] = self.builder_key
+            return llm_generation(*args, **kwargs)
+
         env = BrowserEnv(
             project_dir=self.workspace_dir,
             log_dir=self.log_dir,
             start_cmd=dynamic_start_cmd,
-            instruction=self.instruction,  # 传任务
-            builder_model=self.model,  # 传当前的 Builder 模型 (无状态)
-            llm_caller=llm_generation  # 传生成函数
+            instruction=self.instruction,
+            builder_model=self.model,
+            llm_caller=isolated_llm_caller  # 🌟 传入包装后的函数
         )
 
         trace = []
@@ -326,7 +338,6 @@ class WebGenAgent:
                     else:
                         print(f"\033[91m{log_feedback}\033[0m")
 
-                # 🌟 修改 2：从“专线信箱”提取系统通知 (后台弹窗处理记录)
                 system_notes = []
                 if hasattr(env, 'get_and_clear_system_notes'):
                     system_notes = env.get_and_clear_system_notes()
@@ -345,13 +356,13 @@ class WebGenAgent:
                     max_steps=self.max_visual_steps
                 )
 
-                # 🌟 修改 3：组装包含系统通知的上下文
                 step_context = f"Action History:\n{history_text}\n"
                 if sys_feedback:
                     step_context += f"{sys_feedback}\n"
                 if log_feedback:
                     step_context += f"{log_feedback}\n"
 
+                # 🌟 3. 注入 VLM (视觉 Copilot) 专属凭证
                 response = vlm_generation(
                     model=self.vlm_model,
                     messages=[
@@ -360,7 +371,9 @@ class WebGenAgent:
                             {"type": "text", "text": step_context},
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}
                         ]}
-                    ]
+                    ],
+                    base_url=self.vlm_url,  # 🌟
+                    api_key=self.vlm_key  # 🌟
                 )
 
                 action = "Wait"
@@ -414,12 +427,18 @@ class WebGenAgent:
         b64_img = encode_image(last_screenshot_path)
         sys_msg = FAILURE_ANALYSIS_PROMPT.format(instruction=self.instruction, limit=self.error_limit)
         try:
-            return vlm_generation(model=self.vlm_model, messages=[
-                {"role": "system", "content": sys_msg},
-                {"role": "user", "content": [{"type": "text", "text": f"Trace: {json.dumps(trace)}"},
-                                             {"type": "image_url",
-                                              "image_url": {"url": f"data:image/png;base64,{b64_img}"}}]}
-            ])
+            # 🌟 4. 注入 VLM 凭证
+            return vlm_generation(
+                model=self.vlm_model,
+                messages=[
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": [{"type": "text", "text": f"Trace: {json.dumps(trace)}"},
+                                                 {"type": "image_url",
+                                                  "image_url": {"url": f"data:image/png;base64,{b64_img}"}}]}
+                ],
+                base_url=self.vlm_url,  # 🌟
+                api_key=self.vlm_key  # 🌟
+            )
         except:
             return "Analysis failed."
 
@@ -428,8 +447,18 @@ class WebGenAgent:
             self.messages.append({"role": "user", "content": user_feedback})
 
         concise_messages = self.get_concise_messages()
-        output = llm_generation(concise_messages, self.model, max_tokens=self.max_tokens,
-                                max_completion_tokens=self.max_completion_tokens, temperature=self.temperature)
+
+        # 🌟 5. 核心修改：Builder LLM 升级为调用 vlm_generation，并传入专属凭证
+        output = vlm_generation(
+            messages=concise_messages,
+            model=self.model,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            temperature=self.temperature,
+            base_url=self.builder_url,  # 🌟
+            api_key=self.builder_key,  # 🌟
+            stream = True
+        )
 
         # 1. Ask User
         if re.search(r'<boltAction\s+type\s*=\s*["\']ask_user["\'].*?>', output, re.DOTALL | re.IGNORECASE):
@@ -509,7 +538,6 @@ class WebGenAgent:
 
             extract_and_write_files(output, self.workspace_dir)
 
-            # 🌟 同理，分配首选端口，不再依赖底层去猜
             preferred_port = find_free_port()
             dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
 
@@ -540,7 +568,6 @@ class WebGenAgent:
             print(
                 f"\033[93m[Warn] LLM Format Error (Total: {self.format_error_count}). Requesting regeneration...\033[0m")
 
-            # 向模型发送强约束纠错提示
             correction_msg = (
                 "SYSTEM WARNING: Your previous output did not match any expected action path. "
                 "You MUST choose exactly ONE path (A, B, C, or D). "
@@ -558,7 +585,6 @@ class WebGenAgent:
     def save_history(self, i, pre=None, has_error=False):
         output_file = os.path.join(self.log_dir, "history.json")
 
-        # 将累计格式错误次数保存进历史节点数据中
         self.nodes[f"step{i}.json"] = {
             "has_error": has_error,
             "pre": pre,

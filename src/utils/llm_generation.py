@@ -23,7 +23,7 @@ robust_transport = httpx.HTTPTransport(retries=3)
 http_client = httpx.Client(
     base_url=base_url,
     follow_redirects=True,
-    timeout=robust_timeout,  # 增加超时时间到 300 秒，防止大模型生成长代码时断开
+    timeout=robust_timeout,  # 增加超时时间到 1800 秒，防止大模型生成长代码时断开
     transport=robust_transport  # 在 TCP/SSL 协议层自动重试 3 次
 )
 
@@ -77,6 +77,7 @@ STREAMING_MODELS = {
     "kimi-k2.5",
     "qwen3.5-397b-a17b",
     "gpt-5.2"
+    "claude-sonnet-4-6"
 }
 
 
@@ -97,9 +98,10 @@ def _call_with_stream(api_client, params: dict) -> str:
     return "".join(full_content)
 
 
-def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, temperature=0.5):
+def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, base_url=None,
+                   api_key=None, **kwargs):
     """
-    Generate text using LLM with robust retry logic.
+    Generate text using LLM with robust retry logic and dynamic isolated credentials.
     For kimi-k2.5 and qwen3.5-397b-a17b, streaming is used automatically.
     """
 
@@ -118,6 +120,7 @@ def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, tem
                 "messages": messages,
                 "temperature": temperature
             }
+            params.update(kwargs)
 
             # 兼容不同的 token 参数名 (O1 模型 vs 标准模型)
             if max_completion_tokens > 0:
@@ -126,10 +129,26 @@ def llm_generation(messages, model, max_tokens=-1, max_completion_tokens=-1, tem
                 params["max_tokens"] = max_tokens
 
             # -----------------------------------------------------------------
-            # 3. 发起调用 (动态路由)
+            # 3. 发起调用 (动态路由: 本地优先 > 专属凭证 > 全局兜底)
             # -----------------------------------------------------------------
             local_client = get_local_client(model)
-            active_client = local_client if local_client else client
+
+            if local_client:
+                active_client = local_client
+            elif base_url and api_key:
+                # 动态生成隔离客户端，确保 API Key 不串台
+                active_client = OpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    http_client=httpx.Client(
+                        base_url=base_url,
+                        follow_redirects=True,
+                        timeout=robust_timeout,
+                        transport=robust_transport
+                    )
+                )
+            else:
+                active_client = client
 
             if use_stream:
                 # 流式传输：拼接所有 chunk 得到完整内容
