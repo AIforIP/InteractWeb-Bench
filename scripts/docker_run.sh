@@ -10,9 +10,8 @@
 PROJECT_PATH="/data/shared/users/wangqiyao/InteractWeb-Bench"
 
 docker run -it --rm \
-  --name interactweb_test-gemma-4-31-3 \
+  --name interactweb_test-qwen-retest \
   --network host \
-  # 将本地源码及配置文件挂载至容器内部 /app 目录
   -v "${PROJECT_PATH}/src:/app/src" \
   -v "${PROJECT_PATH}/scripts:/app/scripts" \
   -v "${PROJECT_PATH}/data:/app/data" \
@@ -23,7 +22,5 @@ docker run -it --rm \
   -v "${PROJECT_PATH}/config2.yaml:/app/config2.yaml" \
   -v "${PROJECT_PATH}/config3.yaml:/app/config3.yaml" \
   -v "${PROJECT_PATH}/config4.yaml:/app/config4.yaml" \
-  # 覆盖镜像默认入口，以交互式 Bash 方式启动
-  # 这里我们将config.yaml分为四份方便分批调试
   --entrypoint /bin/bash \
   interactweb-bench:v1.0
