@@ -29,7 +29,6 @@ This repo contains the evaluation code for the paper "[InteractWeb-Bench: Can Mu
 
 ## 🔔 News
 
-- 📑 [2026-04-01] Releasing [Preprint](https://arxiv.org/pdf/).
 - 😄 [2026-04-24] Releasing [Website](https://interactweb-bench.wangqiyao.me/).
 - 🔥 [2026-02-16] Research Begining.
 
