@@ -2,7 +2,7 @@
   <img src="./assets/interactweb-bench-logo.png" width="200" alt="InteractWeb-Bench Logo">
 </p>
 
-<h3 align="center"><strong>InteractWeb-Bench</strong>: Can Multimodal Agent Escape Blind Execution in Interactive Website Generation?</h3>
+<h3 align="center"><strong>InteractWeb-Bench</strong>: Can Multimodal Agent Escape <br> Blind Execution in Interactive Website Generation?</h3>
 
 <p align="center">
   <a href="wangqiyao.me">Qiyao Wang</a><sup>1,2,*</sup>, Haoran Hu<sup>3,*</sup>, Longze Chen<sup>1,2</sup>, Hongbo Wang<sup>3</sup>, Hamid Alinejad-Rokny<sup>4</sup>, Yuan Lin<sup>3,†</sup>, Min Yang<sup>1,5,†</sup>
