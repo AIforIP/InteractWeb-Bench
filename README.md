@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/interactweb-bench-logo.png" width="200" alt="FlowPIE Logo">
+  <img src="./assets/interactweb-bench-logo.png" width="200" alt="InteractWeb-Bench Logo">
 </p>
 
 <h3 align="center"><strong>InteractWeb-Bench</strong>: Can Multimodal Agent Escape Blind Execution in Interactive Website Generation?</h3>
