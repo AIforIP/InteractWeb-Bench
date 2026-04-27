@@ -39,7 +39,11 @@ This repo contains the evaluation code for the paper "[InteractWeb-Bench: Can Mu
 - [ ] Software Demostration
 
 ## 📝 Introduction
+InteractWeb-Bench is a multimodal interactive benchmark for evaluating website generation agents under real-world, non-expert user conditions. 
 
+It simulates ambiguous, noisy, and conflicting user instructions through persona-driven user agents, and introduces a dynamic action space (Clarify, Implement, Verify, Submit) to assess agents’ ability to escape “blind execution” and align with user intent.
+
+This project provides a realistic environment for studying interactive code generation, intent clarification, and GUI-based verification.
 
 ![InteractWeb-Bench overview](./assets/framework.bmp)
 
