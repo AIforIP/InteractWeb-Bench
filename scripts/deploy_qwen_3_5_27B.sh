@@ -1,21 +1,23 @@
 #!/bin/bash
 
-# 自动读取并解析 .env 文件
+# Automatically read and parse the .env file
 if [ -f ../.env ]; then
   set -a; source ../.env; set +a
 elif [ -f .env ]; then
   set -a; source .env; set +a
 fi
 
-# 该脚本作为节点 1 启动，读取 NODE_1 的端口
+# This script launches Node 4 and reads the port from NODE_4 configuration
 TARGET_PORT=${LOCAL_NODE_4_PORT:-8027}
 
 echo "Starting vLLM Node 4 on port: $TARGET_PORT"
 
+# Kill any process currently using the target port to avoid conflicts
 fuser -k ${TARGET_PORT}/tcp >/dev/null 2>&1
 
 MODEL_PATH="/data/shared/users/wangqiyao/models/Qwen3.5-27B"
 
+# Launch a vLLM inference server for Qwen3.5-27B
 CUDA_VISIBLE_DEVICES=2 python -m vllm.entrypoints.openai.api_server \
     --model $MODEL_PATH \
     --served-model-name "Qwen3.5-27B" \

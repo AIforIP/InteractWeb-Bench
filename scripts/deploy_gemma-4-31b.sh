@@ -1,21 +1,23 @@
 #!/bin/bash
 
-# 自动读取并解析 .env 文件
+# Automatically read and parse the .env file
 if [ -f ../.env ]; then
   set -a; source ../.env; set +a
 elif [ -f .env ]; then
   set -a; source .env; set +a
 fi
 
-# 该脚本作为节点 1 启动，读取 NODE_1 的端口
+# This script launches Node 5 and reads the port from NODE_5 configuration
 TARGET_PORT=${LOCAL_NODE_5_PORT:-8028}
 
 echo "Starting vLLM Node 5 on port: $TARGET_PORT"
 
+# Kill any process currently using the target port to avoid conflicts
 fuser -k ${TARGET_PORT}/tcp >/dev/null 2>&1
 
 MODEL_PATH="/data/shared/users/wangqiyao/models/gemma-4-31B-it"
 
+# Launch a vLLM inference server for Gemma-4-31B with multi-GPU support
 CUDA_VISIBLE_DEVICES=4,5 python -m vllm.entrypoints.openai.api_server \
     --model $MODEL_PATH \
     --served-model-name "gemma-4-31B-it" \
