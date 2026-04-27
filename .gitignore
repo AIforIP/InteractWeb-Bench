@@ -4,7 +4,11 @@ __pycache__/
 **/__pycache__/
 node_modules/
 **/node_modules/
+# Ignore frontend subproject
+bolt-ui/
 
+# Ignore local server script
+server.py
 *.png
 *.csv
 experiment/*.png
