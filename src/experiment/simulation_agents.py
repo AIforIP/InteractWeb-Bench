@@ -2,14 +2,14 @@ import os
 import json
 import sys
 
-# 引入项目根目录
+
 project_root = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 sys.path.insert(0, project_root)
 
 from utils.llm_generation import llm_generation
 from utils.vlm_generation import vlm_generation, encode_image
 
-# --- 1. 角色的特定表达风格 (Persona Rules) ---
+
 PERSONA_RULES = {
     "P-MIN": """
 **Persona: Minimalist (P-MIN)**
@@ -34,10 +34,17 @@ PERSONA_RULES = {
 - You initially hold cognitive biases, but defer to the expert's professional judgment upon questioning.
 - Rule: If the developer identifies a contradiction, first defend your original stance briefly ("Are you sure? I thought it looked good..."), but then immediately provide the ACCURATE requirement from the Ground Truth to allow the project to move forward.
 - Rule: For non-conflicting questions, provide rigid and accurate data.
+""",
+
+    "P-BASE": """
+**Persona: Base Ideal Client (P-BASE)**
+- You are an ideal, highly cooperative, and professional software client.
+- Rule: Answer the developer's clarification questions directly, clearly, and concisely using ONLY the facts provided in the Ground Truth.
+- Rule: Do not add any conversational filler, emotional noise, or technical contradictions. Just provide the exact technical requirement they asked for in a professional tone.
 """
 }
 
-# --- 2. 核心双层架构 System Prompt ---
+
 USER_SIMULATION_SYSTEM_PROMPT = """
 You are a non-technical client communicating with a web developer.
 
@@ -64,76 +71,48 @@ Reply directly with your answer in English. Do not output your internal thinking
 
 class UserSimulator:
     def __init__(self, ground_truth_instruction, initial_instruction, evaluation_checklist, persona="P-MIN",
-                 model="gpt-4o", vlm_model="gpt-4o", base_url=None, api_key=None):  # 🌟 新增专属配置参数
+                 model="gpt-4o", vlm_model="gpt-4o", base_url=None, api_key=None):
         self.ground_truth_instruction = ground_truth_instruction
         self.evaluation_checklist = evaluation_checklist
         self.persona = persona
         self.model = model
         self.vlm_model = vlm_model
-
-        # 🌟 挂载专属路由和密钥
         self.base_url = base_url
         self.api_key = api_key
-
-        # 记忆系统初始化：将批量生成的初始指令 (L1) 作为第一条发出的消息记录下来
         self.conversation_history = [
             {"role": "assistant", "content": f"I initially told the developer: \"{initial_instruction}\""}
         ]
 
     def answer_question(self, question):
-        """
-        基于“核心法则+角色滤镜+历史记忆”回答问题
-        """
-        # 1. 获取对应角色的规则并组装 System Prompt
         persona_rules = PERSONA_RULES.get(self.persona, PERSONA_RULES["P-MIN"])
         system_prompt = USER_SIMULATION_SYSTEM_PROMPT.format(
             ground_truth=self.ground_truth_instruction,
             persona_rules=persona_rules
         )
-
-        # 2. 组装发送给大模型的消息列表
         messages = [{"role": "system", "content": system_prompt}]
-
-        # 载入之前的交互记忆（包含初始指令）
         messages.extend(self.conversation_history)
-
-        # 载入开发者当前的新问题
         current_question_msg = {"role": "user", "content": f"The Developer asks: \"{question}\""}
         messages.append(current_question_msg)
-
-        # 3. 🌟 调用大模型生成回答 (透传专属路由配置)
         response = llm_generation(
             messages=messages,
             model=self.model,
             temperature=0.4,
-            base_url=self.base_url,  # 透传专属 URL
-            api_key=self.api_key  # 透传专属 Key
+            base_url=self.base_url,
+            api_key=self.api_key
         )
         answer = response.strip()
-
-        # 4. 将本轮问答写入记忆，供下一轮使用
         self.conversation_history.append(current_question_msg)
         self.conversation_history.append({"role": "assistant", "content": answer})
 
         return answer
 
     def evaluate_with_hybrid_oracle(self, target_url, screenshot_path, oracle_slots):
-        """
-        调用全新的双轨客观评估系统 (Playwright + VQA)
-        注意：外部在调用此方法前，需要确保服务器已启动并已截取 screenshot_path
-        """
         from experiment.hybrid_evaluator import execute_hybrid_feedback
-
-        # 执行双轨评测
         metrics = execute_hybrid_feedback(target_url, screenshot_path, oracle_slots, self.vlm_model)
-
         sr = metrics.get("Success_Rate_SR", 0)
         tcr = metrics.get("Task_Completion_Rate_TCR", 0.0)
         details = metrics.get("Details", [])
-
-        # 组装给 Agent 看的最终反馈报告 (或者仅用于论文数据统计)
         status = "SATISFIED" if sr == 1 else "REJECTED"
-
         final_report_text = f"**User Acceptance Test Report (Hybrid Evaluation)**\n"
         final_report_text += f"Final Status: {status}\n"
         final_report_text += f"Task Completion Rate (TCR): {tcr * 100}%\n\n"

@@ -8,7 +8,7 @@ import socket
 from contextlib import closing
 from typing import Dict, Tuple, Any
 
-# 引入项目根目录
+
 project_root = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 sys.path.insert(0, project_root)
 
@@ -25,18 +25,16 @@ from utils.vlm_generation import vlm_generation, encode_image, compress_and_enco
 from utils.execute_for_feedback import BrowserEnv, run_commands, execute_for_feedback
 
 
-# --- 动态端口辅助函数 ---
+
 def find_free_port():
-    """向操作系统借一个绝对空闲的随机端口，用作 Vite 的首选起点"""
+
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(('', 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.getsockname()[1]
 
 
-# ==============================================================================
-# [核心逻辑] INTERNAL_TEST_PROMPT (无标签纯视觉 + 键盘支持版)
-# ==============================================================================
+
 INTERNAL_TEST_PROMPT = """
 You are the "Visual Copilot" for a web developer.
 Your Goal: Verify the implementation based on the **User Instruction** AND the **Developer's Verification Criteria**.
@@ -73,7 +71,7 @@ Your Goal: Verify the implementation based on the **User Instruction** AND the *
 Thought: [Your analysis in a single paragraph. Mention if you detected an auto-filled result.]
 Action: [One action command from the list above]
 """
-# --- 死循环故障分析 Prompt ---
+
 FAILURE_ANALYSIS_PROMPT = """
 You are a "Post-Mortem Analyst" AI. 
 The Web Agent has got stuck in a verification loop (failed {limit} times in a row).
@@ -110,12 +108,11 @@ class WebGenAgent:
     def __init__(self, model, vlm_model, fb_model, workspace_dir, log_dir, instruction, max_iter, overwrite,
                  error_limit, max_tokens=-1, max_completion_tokens=-1, temperature=0.5, custom_system_prompt=None,
                  difficulty="middle", max_simulation_steps=15,
-                 builder_url=None, builder_key=None, vlm_url=None, vlm_key=None):  # 🌟 1. 注入 4 个专属凭证参数
+                 builder_url=None, builder_key=None, vlm_url=None, vlm_key=None):
         self.model = model
         self.vlm_model = vlm_model
-        self.fb_model = fb_model  # (历史遗留参数，实际底层由 UserSimulator 代理)
+        self.fb_model = fb_model
 
-        # 🌟 挂载凭证
         self.builder_url = builder_url
         self.builder_key = builder_key
         self.vlm_url = vlm_url
@@ -169,7 +166,7 @@ class WebGenAgent:
         self.messages = [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": instruction}]
         self.step_idx = -1
         self.consecutive_failures = 0
-        self.format_error_count = 0  # 增加全局格式违规计数器
+        self.format_error_count = 0
         self.nodes = {}
 
         restored = restore_from_last_step(log_dir, workspace_dir, max_iter)
@@ -179,25 +176,25 @@ class WebGenAgent:
                 self.is_finished = True
 
     def get_concise_messages(self):
-        """获取压缩后的消息上下文，并强制限制全局图片数量，防止触发 API 400 错误"""
-        MAX_IMAGES = 3  # 安全阈值，只保留上下文中最新的 3 张图片
+
+        MAX_IMAGES = 3
         image_count = 0
         concise_msgs = []
 
-        # 逆序遍历消息，优先保留最新的图片
+
         for m in reversed(self.messages):
             new_msg = {"role": m["role"]}
 
-            # 如果 content 是列表（可能包含文本和图片）
+
             if isinstance(m["content"], list):
                 new_content = []
-                # 再次逆序遍历 content 列表中的元素
+
                 for item in reversed(m["content"]):
                     if isinstance(item, dict) and item.get("type") == "image_url":
                         if image_count < MAX_IMAGES:
                             new_content.insert(0, item)
                             image_count += 1
-                        # 如果图片数量已达上限，则直接丢弃该图片对象
+
                     else:
                         new_content.insert(0, item)
                 new_msg["content"] = new_content
@@ -280,7 +277,7 @@ class WebGenAgent:
         preferred_port = find_free_port()
         dynamic_start_cmd = f"npm run dev -- --port {preferred_port}"
 
-        # 🌟 2. 闭包包装器：防止 BrowserEnv 内部调用丢失凭证
+
         def isolated_llm_caller(*args, **kwargs):
             kwargs['base_url'] = self.builder_url
             kwargs['api_key'] = self.builder_key
@@ -292,7 +289,7 @@ class WebGenAgent:
             start_cmd=dynamic_start_cmd,
             instruction=self.instruction,
             builder_model=self.model,
-            llm_caller=isolated_llm_caller  # 🌟 传入包装后的函数
+            llm_caller=isolated_llm_caller
         )
 
         trace = []
@@ -314,7 +311,7 @@ class WebGenAgent:
                 b64_img = encode_image(img_path)
 
                 if not b64_img or len(b64_img) < 100:
-                    print("\033[91m[致命错误] 截图 Base64 过短或失败，拦截 VLM 调用！\033[0m")
+                    print("\033[91m[FATAL ERROR] Screenshot Base64 is too short or failed, VLM call intercepted!\033[0m")
                     status = "error"
                     error_msg = "Screenshot capture failed or image is corrupted."
                     break
@@ -362,7 +359,7 @@ class WebGenAgent:
                 if log_feedback:
                     step_context += f"{log_feedback}\n"
 
-                # 🌟 3. 注入 VLM (视觉 Copilot) 专属凭证
+
                 response = vlm_generation(
                     model=self.vlm_model,
                     messages=[
@@ -372,8 +369,8 @@ class WebGenAgent:
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}
                         ]}
                     ],
-                    base_url=self.vlm_url,  # 🌟
-                    api_key=self.vlm_key  # 🌟
+                    base_url=self.vlm_url,
+                    api_key=self.vlm_key
                 )
 
                 action = "Wait"
@@ -427,7 +424,7 @@ class WebGenAgent:
         b64_img = encode_image(last_screenshot_path)
         sys_msg = FAILURE_ANALYSIS_PROMPT.format(instruction=self.instruction, limit=self.error_limit)
         try:
-            # 🌟 4. 注入 VLM 凭证
+
             return vlm_generation(
                 model=self.vlm_model,
                 messages=[
@@ -436,8 +433,8 @@ class WebGenAgent:
                                                  {"type": "image_url",
                                                   "image_url": {"url": f"data:image/png;base64,{b64_img}"}}]}
                 ],
-                base_url=self.vlm_url,  # 🌟
-                api_key=self.vlm_key  # 🌟
+                base_url=self.vlm_url,
+                api_key=self.vlm_key
             )
         except:
             return "Analysis failed."
@@ -448,15 +445,15 @@ class WebGenAgent:
 
         concise_messages = self.get_concise_messages()
 
-        # 🌟 5. 核心修改：Builder LLM 升级为调用 vlm_generation，并传入专属凭证
+
         output = vlm_generation(
             messages=concise_messages,
             model=self.model,
             max_tokens=self.max_tokens,
             max_completion_tokens=self.max_completion_tokens,
             temperature=self.temperature,
-            base_url=self.builder_url,  # 🌟
-            api_key=self.builder_key,  # 🌟
+            base_url=self.builder_url,
+            api_key=self.builder_key,
             stream = True
         )
 
@@ -559,7 +556,7 @@ class WebGenAgent:
             self.messages.append({"role": "user", "content": fb, "info": info_user})
             return {"type": "coding", "content": output, "is_finish": False}, False
 
-        # 5. Fallback (格式违规兜底纠错)
+
         else:
             self.format_error_count += 1
             info_assistant = {"is_format_error": True}

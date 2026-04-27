@@ -52,7 +52,6 @@ IN_VIEWPORT_RATIO_THRESHOLD = 0.6
 def fetch_browser_info(
         page: Page,
 ) -> BrowserInfo:
-    # 建立 CDP (Chrome DevTools Protocol) 会话
     client = page.context.new_cdp_session(page)
 
     # extract domtree
@@ -68,7 +67,7 @@ def fetch_browser_info(
     # calibrate the bounds, in some cases, the bounds are scaled somehow
     bounds = tree["documents"][0]["layout"]["bounds"]
     b = bounds[0]
-    # Playwright 获取视口宽度
+    # Playwright 
     viewport_width = page.viewport_size["width"]
     n = b[2] / viewport_width
     bounds = [[x / n for x in bound] for bound in bounds]

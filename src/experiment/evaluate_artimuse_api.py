@@ -7,31 +7,31 @@ import re
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# 加载环境变量中的 API 配置
+
 load_dotenv()
 DEFAULT_VLM_URL = os.environ.get("OPENAILIKE_VLM_BASE_URL", "")
 DEFAULT_API_KEY = os.environ.get("OPENAILIKE_VLM_API_KEY", "")
 
 
 def encode_image_to_base64(image_path: str) -> str:
-    """将本地图片读取并转换为 Base64 字符串"""
+
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
 def extract_json_from_text(text: str) -> dict:
-    """从 API 返回的文本中安全提取 JSON（兼容 markdown 代码块）"""
-    # 优先匹配 ```json ... ``` 格式
+
+
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
     if match:
         json_str = match.group(1)
     else:
-        # 再尝试匹配普通 ``` ... ``` 代码块
+
         match = re.search(r"```\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:
-            # 尝试直接查找最外层大括号
+
             start = text.find("{")
             end = text.rfind("}")
             if start != -1 and end != -1 and end > start:
@@ -42,7 +42,7 @@ def extract_json_from_text(text: str) -> dict:
     try:
         return json.loads(json_str)
     except json.JSONDecodeError:
-        # 解析失败时的保底默认值
+
         return {
             "has_visual_bug": False,
             "visual_layout_score": 3,
@@ -53,11 +53,12 @@ def extract_json_from_text(text: str) -> dict:
 
 
 def call_vlm_api(image_base64: str, model_name: str, prompt: str) -> dict:
-    """通过 OpenAI 兼容接口调用视觉大模型进行打分"""
+
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {DEFAULT_API_KEY}"
     }
+
 
     payload = {
         "model": model_name,
@@ -75,6 +76,8 @@ def call_vlm_api(image_base64: str, model_name: str, prompt: str) -> dict:
             }
         ],
         "temperature": 0.0,
+        "top_p": 0.0001,
+        "seed": 42,
         "response_format": {"type": "json_object"}
     }
 
@@ -91,26 +94,50 @@ def call_vlm_api(image_base64: str, model_name: str, prompt: str) -> dict:
     return extract_json_from_text(content)
 
 
+def process_task(task_id, base_log_path, judge_model, eval_prompt):
+
+    image_path = os.path.join(base_log_path, task_id, "visual_step_0.png")
+
+    if not os.path.exists(image_path):
+        return None
+
+    try:
+        base64_image = encode_image_to_base64(image_path)
+        eval_data = call_vlm_api(base64_image, judge_model, eval_prompt)
+
+        return {
+            "task_id": task_id,
+            "has_visual_bug": bool(eval_data.get("has_visual_bug", False)),
+            "visual_layout": float(eval_data.get("visual_layout_score", 3)),
+            "creative_alignment": float(eval_data.get("creative_alignment_score", 3)),
+            "overall_aesthetics": float(eval_data.get("overall_aesthetics_score", 3)),
+            "reasoning": eval_data.get("reasoning", "")
+        }
+    except Exception as e:
+        return {"error": str(e), "task_id": task_id}
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log_dir", type=str, default="/home/hhr/home/experiment_results", help="实验结果根目录")
-    parser.add_argument("--target_model", type=str, default="gpt-5-mini", help="被评测的 Agent 模型名称")
-    parser.add_argument("--judge_model", type=str, default="gpt-5-mini", help="用于打分的 VLM API 模型名称")
+    parser.add_argument("--log_dir", type=str, default="/your_path/experiment_results",
+                        help="Root directory for experiment results")
+
+    parser.add_argument("--target_model", type=str, default="qwen3.5-397b-a17b",
+                        help="Name of the agent model to be evaluated")
+
+    parser.add_argument("--target_task", type=str, default="000070_P-RAM",
+                        help="Task ID for re-evaluating a specific sample")
+    parser.add_argument("--judge_model", type=str, default="gpt-5-mini", help="VLM API model name used for scoring")
     args = parser.parse_args()
 
     safe_model_name = args.target_model.replace("/", "-").replace(":", "-")
     base_log_path = os.path.join(args.log_dir, safe_model_name, "logs")
+    summary_path = os.path.join(args.log_dir, safe_model_name, "api_aesthetic_evaluation.json")
 
     if not os.path.exists(base_log_path):
         print(f"[ERROR] Log directory not found: {base_log_path}")
         return
 
-    task_dirs = [
-        d for d in os.listdir(base_log_path)
-        if os.path.isdir(os.path.join(base_log_path, d))
-    ]
-
-    # 修改点 1：替换为极度严苛的高区分度 Prompt
     eval_prompt = """
 You are a highly critical expert web designer and visual aesthetics evaluator based on the "ArtiMuse" framework.
 Evaluate the clean screenshot of the generated webpage (ignore any external testing markers or debug text if present).
@@ -139,66 +166,76 @@ Evaluate the clean screenshot of the generated webpage (ignore any external test
    [2] Unattractive, hard to look at.
    [1] Visually offensive or completely broken.
 
-Output ONLY a valid JSON object matching this exact structure:
+CRITICAL: You MUST output ONLY a valid JSON object. 
+To enforce step-by-step thinking, you MUST output the "reasoning" key FIRST, before assigning any scores.
+Match this exact structure:
 {
+  "reasoning": "<Be extremely critical. Explicitly mention why it didn't get a 5, justify any low scores, and analyze each of the 3 dimensions before outputting the scores below.>",
   "has_visual_bug": true or false,
   "visual_layout_score": <int 1-5>,
   "creative_alignment_score": <int 1-5>,
-  "overall_aesthetics_score": <int 1-5>,
-  "reasoning": "<Be extremely critical. Explicitly mention why it didn't get a higher score, and justify if you gave a low score.>"
+  "overall_aesthetics_score": <int 1-5>
 }
 """.strip()
 
-    results = []
-    print(f"\n[INFO] Starting API-based Aesthetic Evaluation for model: {args.target_model}")
-    print(f"[INFO] Using Judge Model via API: {args.judge_model}")
+    print(f"\n[INFO] Re-requesting evaluation for model {args.target_model} on specific task [{args.target_task}]...")
 
-    for task_id in tqdm(task_dirs, desc="Evaluating Images"):
-        # 修改点 2：将 target image 替换为 `visual_step_0.png` 纯净版截图
-        image_path = os.path.join(base_log_path, task_id, "visual_step_0.png")
 
-        # 如果截图不存在，跳过
-        if not os.path.exists(image_path):
-            continue
+    existing_data = {"aggregate_metrics": {}, "trajectory_details": []}
+    if os.path.exists(summary_path):
+        with open(summary_path, "r", encoding="utf-8") as f:
+            existing_data = json.load(f)
 
-        try:
-            base64_image = encode_image_to_base64(image_path)
-            eval_data = call_vlm_api(base64_image, args.judge_model, eval_prompt)
+    trajectory_details = existing_data.get("trajectory_details", [])
 
-            results.append({
-                "task_id": task_id,
-                "has_visual_bug": bool(eval_data.get("has_visual_bug", False)),
-                "visual_layout": float(eval_data.get("visual_layout_score", 3)),
-                "creative_alignment": float(eval_data.get("creative_alignment_score", 3)),
-                "overall_aesthetics": float(eval_data.get("overall_aesthetics_score", 3)),
-                "reasoning": eval_data.get("reasoning", "")
-            })
-        except Exception as e:
-            tqdm.write(f"[ERROR] Failed to evaluate task {task_id}: {e}")
 
-    if results:
-        valid_tasks_count = len(results)
-        bugs_count = sum(1 for r in results if r["has_visual_bug"])
+    res = process_task(args.target_task, base_log_path, args.judge_model, eval_prompt)
+
+    if res is None:
+        print(f"[ERROR] Screenshot visual_step_0.png for task {args.target_task} not found. Please check the path.")
+        return
+    if "error" in res:
+        print(f"[ERROR] VLM evaluation failed for task {args.target_task}: {res['error']}")
+        return
+
+    print(f"\n Re-evaluation successful! New result:\n{json.dumps(res, indent=2, ensure_ascii=False)}")
+
+    updated = False
+    for i, item in enumerate(trajectory_details):
+        if item.get("task_id") == args.target_task:
+            trajectory_details[i] = res
+            updated = True
+            break
+
+    if not updated:
+        print(f"[INFO] Task {args.target_task} not found in history. Appending it as new data.")
+        trajectory_details.append(res)
+    else:
+        print(f"[INFO] Successfully replaced the old score for {args.target_task} in the history.")
+
+
+    if trajectory_details:
+        valid_tasks_count = len(trajectory_details)
+        bugs_count = sum(1 for r in trajectory_details if r["has_visual_bug"])
 
         vbr_percentage = (bugs_count / valid_tasks_count) * 100.0
-        avg_vl = sum(r["visual_layout"] for r in results) / valid_tasks_count
-        avg_ca = sum(r["creative_alignment"] for r in results) / valid_tasks_count
-        avg_oa = sum(r["overall_aesthetics"] for r in results) / valid_tasks_count
+        avg_vl = sum(r["visual_layout"] for r in trajectory_details) / valid_tasks_count
+        avg_ca = sum(r["creative_alignment"] for r in trajectory_details) / valid_tasks_count
+        avg_oa = sum(r["overall_aesthetics"] for r in trajectory_details) / valid_tasks_count
 
         total_las_score = avg_vl + avg_ca + avg_oa
 
         print("\n" + "=" * 55)
-        print(f"✅ Aesthetic Evaluation Complete for: {args.target_model}")
-        print(f"📊 Valid Evaluated Images: {valid_tasks_count} (Crashed samples safely skipped)")
+        print(f" Refreshed overall metrics for {args.target_model} (based on {valid_tasks_count} samples)")
         print("-" * 55)
-        print(f"📉 Objective Defect (VBR) $\\downarrow$: {vbr_percentage:.1f}%")
-        print(f"📈 Visual Layout (LAS-VL) $\\uparrow$: {avg_vl:.2f} / 5.0")
-        print(f"📈 Creative Alignment (CA) $\\uparrow$: {avg_ca:.2f} / 5.0")
-        print(f"📈 Overall Aesthetics (OA) $\\uparrow$: {avg_oa:.2f} / 5.0")
-        print(f"⭐ Total Macro Score $\\uparrow$     : {total_las_score:.2f} / 15.0")
+        print(f" Objective Defect (VBR) : {vbr_percentage:.1f}%")
+        print(f" Visual Layout (LAS-VL) : {avg_vl:.2f} / 5.0")
+        print(f" Creative Alignment (CA) : {avg_ca:.2f} / 5.0")
+        print(f" Overall Aesthetics (OA) : {avg_oa:.2f} / 5.0")
+        print(f" Total Macro Score       : {total_las_score:.2f} / 15.0")
         print("=" * 55)
 
-        summary_path = os.path.join(args.log_dir, safe_model_name, "api_aesthetic_evaluation.json")
+
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump({
                 "aggregate_metrics": {
@@ -209,12 +246,10 @@ Output ONLY a valid JSON object matching this exact structure:
                     "avg_overall_aesthetics": avg_oa,
                     "total_las_score": total_las_score
                 },
-                "trajectory_details": results
+                "trajectory_details": trajectory_details
             }, f, indent=2, ensure_ascii=False)
 
-        print(f"💾 Detailed trajectory and scores saved to:\n  -> {summary_path}")
-    else:
-        print("[WARNING] No valid images found or all evaluated tasks failed.")
+        print(f" Data has been successfully overwritten and saved to:\n  -> {summary_path}")
 
 
 if __name__ == "__main__":

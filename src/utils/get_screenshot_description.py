@@ -14,7 +14,7 @@ from typing import Dict
 
 
 def parse_json_output(output_str: str) -> Dict[str, object]:
-    # 1) Extract JSON block (handles optional Markdown/code fences)
+
     match = re.search(r"\{.*\}", output_str, flags=re.DOTALL)
     if not match:
         print("No JSON object found in the input string.")
@@ -22,7 +22,7 @@ def parse_json_output(output_str: str) -> Dict[str, object]:
     json_str = match.group(0)
 
     data = {}
-    # 2) Parse JSON into Python dict
+
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as exc:
@@ -175,8 +175,8 @@ def get_screenshot_grade(image_path, model, instruction=None):
 
 
 if __name__ == "__main__":
-    image_path = "/mnt/cache/agent/Zimu/WebGen-Agent/service_logs/WebGenAgentV3_WebGen-Bench_Qwen2_5-Coder-7B-Instruct_711-06071005_checkpoint-16_step-GRPO_pen-rep-tmp1_WebGen-Instruct_2_501_global_step_5_iter20_select_best/000011/screenshot_step4_2025-07-07T12-48-53-423.png"
-    model = "/mnt/cache/sharemath/models/Qwen/Qwen2.5-VL-32B-Instruct"
+    image_path = "/your_path"
+    model = "/your_path/model"
     instruction = "Please implement a consulting business website that provides leadership and business training services. The website should have an e-commerce component, allowing customers to purchase services directly from the site. The website should include features such as workshops, online classes, podcasts, and blogs. Users should be able to browse and purchase services, and interact with the website. Set all pages to have a light cyan background and cadet blue components."
     data, grade = get_screenshot_grade(image_path, model, instruction)
     print(data)

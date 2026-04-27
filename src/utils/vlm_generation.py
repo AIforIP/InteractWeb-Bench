@@ -13,12 +13,9 @@ from anthropic import Anthropic, APIConnectionError as AnthropicConnectionError
 
 load_dotenv()
 
-# ── 配置更加健壮的 HTTP 客户端 ──────────────────────────────────────
-# 1. 增加 timeout 和 底层 transport 重试
 robust_transport = httpx.HTTPTransport(retries=3)
-robust_timeout = 1800.0  # 参考 llm_generation 提升至 1800s
+robust_timeout = 1800.0
 
-# 2. 初始化 OpenAI 客户端 (全局兜底客户端)
 openai_base_url = os.environ.get("OPENAILIKE_VLM_BASE_URL") or os.environ.get("OPENAILIKE_BASE_URL") or os.environ.get(
     "OPENAI_BASE_URL")
 openai_api_key = os.environ.get("OPENAILIKE_VLM_API_KEY") or os.environ.get("OPENAILIKE_API_KEY") or os.environ.get(
@@ -35,7 +32,6 @@ openai_client = OpenAI(
     )
 ) if openai_api_key else None
 
-# 3. 初始化 Anthropic 客户端 (全局兜底客户端)
 anthropic_api_key = os.environ.get("ANTHROPIC_VLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
 anthropic_base_url = os.environ.get("ANTHROPIC_VLM_BASE_URL") or "https://api.anthropic.com/v1"
 
@@ -52,15 +48,11 @@ if anthropic_api_key:
 
 
 def get_local_client(model_name: str):
-    """
-    根据 .env 中的 LOCAL_MODELS_MAP 配置，动态判断当前模型是否为本地部署。
-    支持本地模型与 API 模型的完美混用。
-    """
+
     raw_map = os.environ.get("LOCAL_MODELS_MAP", "")
     if not raw_map.strip():
         return None
 
-    # 🌟 核心修复：自动展开 ${LOCAL_NODE_1_PORT} 这类嵌套的环境变量
     mapping_str = os.path.expandvars(raw_map)
 
     local_route_dict = {}
@@ -84,10 +76,7 @@ def get_local_client(model_name: str):
         )
     return None
 
-
-# ── 新增：流式打字机辅助函数 ──────────────────────────────────────────────────
 def _call_with_stream(api_client, params: dict) -> str:
-    """使用流式传输调用并拼接完整响应。"""
     full_content = []
     with api_client.chat.completions.create(**params, stream=True) as stream:
         for chunk in stream:
@@ -95,17 +84,15 @@ def _call_with_stream(api_client, params: dict) -> str:
             if delta and delta.content:
                 print(delta.content, end="", flush=True)
                 full_content.append(delta.content)
-    print() # 换行
+    print()
     return "".join(full_content)
 
 
-# ── Helper: 图片编码 ──────────────────────────────────────────────────────────
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 
-# ── Helper: MIME type 侦测 ────────────────────────────────────────────────────
 def _detect_media_type(b64: str, fallback: str = "image/jpeg") -> str:
     try:
         hdr = base64.b64decode(b64[:64], validate=False)
@@ -119,7 +106,7 @@ def _detect_media_type(b64: str, fallback: str = "image/jpeg") -> str:
     return fallback
 
 
-# ── Helper: OpenAI 格式转 Anthropic 格式 ──────────────────────────────────────
+
 def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]:
     converted: list[dict] = []
     system_text: str | None = None
@@ -160,7 +147,7 @@ def _convert_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]
     return system_text, converted
 
 
-# ── Unified generation function (带增强版自动重试与动态密钥路由) ───────────────────────────────────
+
 def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completion_tokens=-1, temperature=0.5,
                    base_url=None, api_key=None, stream=False, use_anthropic_sdk=False, **kwargs) -> str:
     """
@@ -172,13 +159,13 @@ def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completi
 
     for attempt in range(max_retries):
         try:
-            # ── 构造公共参数 ──
+
             params = {"model": model, "temperature": temperature}
             params.update(kwargs)
 
-            # ── Branch A: Anthropic 专属逻辑 (需要手动设置为 True 才执行) ──
+
             if use_anthropic_sdk:
-                # 🌟 动态选择 Anthropic Client
+
                 if base_url and api_key:
                     active_anthropic_client = Anthropic(
                         api_key=api_key,
@@ -196,7 +183,7 @@ def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completi
                 final_max_tokens = max_completion_tokens if max_completion_tokens > 0 else (
                     max_tokens if max_tokens > 0 else 4096)
 
-                # Anthropic 暂不支持简单的 stream 展开，维持常规输出
+
                 response = active_anthropic_client.messages.create(
                     model=model,
                     system=system_text,
@@ -206,7 +193,7 @@ def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completi
                 )
                 return response.content[0].text
 
-            # ── Branch B: OpenAI-Compatible (默认分支，包含动态路由和代理中转) ──
+
             if max_completion_tokens > 0:
                 params["max_completion_tokens"] = max_completion_tokens
             elif max_tokens > 0:
@@ -216,13 +203,13 @@ def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completi
 
             params["messages"] = messages
 
-            # 🌟 动态路由策略 (最高优先级: Local配置 > 显式传参 > 全局兜底)
+
             local_client = get_local_client(model)
 
             if local_client:
                 active_client = local_client
             elif base_url and api_key:
-                # 传入了特定的 URL 和 Key，临时创建一个专属的 client
+
                 active_client = OpenAI(
                     api_key=api_key,
                     base_url=base_url,
@@ -238,7 +225,6 @@ def vlm_generation(messages: list[dict], model: str, max_tokens=-1, max_completi
                 if not active_client:
                     raise ValueError("OpenAI client not initialized. Missing API Key.")
 
-            # 🌟 核心：流式与非流式请求分支
             if stream:
                 return _call_with_stream(active_client, params)
             else:
@@ -266,9 +252,7 @@ import io
 
 
 def compress_and_encode_image(image_path, max_size=(800, 800), quality=70):
-    """
-    压缩图片并转为 Base64。
-    """
+
     try:
         with Image.open(image_path) as img:
             if img.mode in ('RGBA', 'P'):

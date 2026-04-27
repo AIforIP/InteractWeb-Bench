@@ -42,7 +42,7 @@ def get_web_element_rect(page, fix_color=True):
     else:
         selected_function = "getRandomColor"
 
-    # 核心修复：最外层加上 (() => { ... })(); 避免 top-level return 报错
+
     js_script = """
         (() => {
             let labels = [];

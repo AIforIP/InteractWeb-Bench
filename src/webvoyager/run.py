@@ -15,9 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# =========================================================
-# 引入 Playwright (替换掉所有的 Selenium 引入)
-# =========================================================
 from playwright.sync_api import sync_playwright
 
 from .webvoyager_prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_TEXT_ONLY
@@ -132,7 +129,7 @@ def setup_logger(folder_path: str):
         logger.removeHandler(handler)
         handler.close()
 
-    # 1. 写入日志文件，并强制指定 utf-8 编码，防止 Windows GBK 报错
+
     handler = logging.FileHandler(log_file_path, encoding='utf-8')
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
@@ -140,11 +137,6 @@ def setup_logger(folder_path: str):
 
     logger.setLevel(logging.INFO)
 
-    # 2. 注释或删除掉控制台输出处理器 (StreamHandler)
-    # 这样命令行就不会再被大量 Prompt Tokens 和大模型的 Base64 字典刷屏了
-    # console_handler = logging.StreamHandler()
-    # console_handler.setFormatter(formatter)
-    # logger.addHandler(console_handler)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -246,54 +238,38 @@ def call_gpt4v_api(args, openai_client, anthropic_client, messages):
             return None, None, True, None
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# 🚀 Playwright Action 统一控制层
-# ────────────────────────────────────────────────────────────────────────────────
-
 def exec_action_click(info, web_ele, page):
-    """Playwright 坐标点击法，无视物理遮挡"""
+
     page.mouse.click(web_ele["x"], web_ele["y"])
     time.sleep(3)
 
 
 def exec_action_type(info, web_ele, page):
-    """Playwright 强制覆盖输入法"""
     warn_obs = ""
     type_content = info["content"]
-
-    # 获取焦点
     page.mouse.click(web_ele["x"], web_ele["y"])
     time.sleep(0.5)
-
-    # 操作系统级全选清除
     mod_key = "Meta" if platform.system() == "Darwin" else "Control"
     page.keyboard.press(f"{mod_key}+A")
     page.keyboard.press("Backspace")
     time.sleep(0.5)
-
-    # 键入新内容并提交
     page.keyboard.type(type_content)
     time.sleep(1)
     page.keyboard.press("Enter")
-    time.sleep(6)  # 留给网络加载的时间
+    time.sleep(6)
     return warn_obs
 
 
 def exec_action_scroll(info, web_eles, page, args):
-    """Playwright 页面或元素范围滚动"""
     scroll_ele_number = info["number"]
     scroll_content = info["content"]
-
-    # 计算滚动的像素步长
     delta_y = args.window_height * 2 // 3 if scroll_content == 'down' else -(args.window_height * 2 // 3)
 
     if scroll_ele_number == "WINDOW":
         page.mouse.wheel(0, delta_y)
     else:
         web_ele = web_eles[int(scroll_ele_number)]
-        # 先将鼠标移动到该元素的中心区域
         page.mouse.move(web_ele["x"], web_ele["y"])
-        # 然后滚动鼠标滚轮
         page.mouse.wheel(0, delta_y)
     time.sleep(3)
 
@@ -311,10 +287,6 @@ ui_limit_prompt_template = (
     "[PASSED ID: 1] Reason: The navigation link was visible and correct."
 )
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 🚀 核心流程引擎 (全面迁移至 Playwright)
-# ────────────────────────────────────────────────────────────────────────────────
 
 def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
     """Run one task in an isolated Playwright process."""
@@ -347,9 +319,7 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
         fp = os.path.join(args.download_dir, f)
         if os.path.isfile(fp): os.remove(fp)
 
-    # =======================================================
-    # Playwright 启动并创建干净上下文
-    # =======================================================
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=args.headless,
@@ -363,14 +333,13 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
         )
         page = context.new_page()
 
-        # [自动拦截原生弹窗，并呼叫子智能体动态推断输入内容]
+
         def handle_dialog(dialog):
             logging.info(f"[SYSTEM DIALOG] Type: {dialog.type}, Message: {dialog.message}")
             if dialog.type == "prompt":
                 try:
-                    logging.info("   -> 触发原生输入框，正在请求 LLM 动态推断输入内容...")
+                    logging.info("   -> Native input field triggered, requesting LLM for dynamic input inference...")
 
-                    # 组装给子智能体的提示词
                     sys_msg = "You are an automated web testing sub-agent. Your job is to decide what text to input into a website's prompt dialog based on the main task."
                     user_msg = (
                         f"Main Task Instruction: {task['ques']}\n\n"
@@ -379,39 +348,38 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
                         "Reply strictly with ONLY the exact text value to input, no quotes, no punctuation, no explanations."
                     )
 
-                    # 临时调用一个纯文本接口进行快速推断 (利用外层已实例化的 client)
+
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",  # 使用小模型保证速度和低成本
+                        model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": sys_msg},
                             {"role": "user", "content": user_msg}
                         ],
                         max_tokens=30,
                         temperature=0,
-                        timeout=10  # 防止网络抖动卡死
+                        timeout=10
                     )
 
-                    # 提取动态生成的输入值，并清除多余的引号
-                    dynamic_input = response.choices[0].message.content.strip().strip("'\"")
-                    logging.info(f"   -> 子智能体决定填入: 【{dynamic_input}】")
 
-                    # 将动态生成的内容填入弹窗并确认
+                    dynamic_input = response.choices[0].message.content.strip().strip("'\"")
+                    logging.info(f"   -> Sub-agent decides to fill in: 【{dynamic_input}】")
+
+
                     dialog.accept(dynamic_input)
 
                 except Exception as e:
-                    logging.error(f"   -> 动态推理失败: {e}。使用安全回退方案。")
-                    dialog.accept("https://example.com")  # 兜底方案
+                    logging.error(f"   -> Dynamic inference failed: {e}. Using fallback solution.")
+                    dialog.accept("https://example.com")
             else:
-                # 普通的 alert 或 confirm 直接确认
+
                 dialog.accept()
 
         page.on("dialog", handle_dialog)
 
         try:
-            # 开启网络加载保护，防止卡死
+
             page.goto(task["web"], timeout=45000, wait_until="domcontentloaded")
             time.sleep(3)
-            # 点击下 body 让页面获取焦点
             page.mouse.click(10, 10)
         except Exception as e:
             logging.error("Error: Cannot access the website %s. %s", task["web"], str(e))
@@ -451,11 +419,11 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
             elif not fail_obs:
                 try:
                     if not args.text_only:
-                        # 从 Utils 接收解析后的坐标字典 web_eles
+
                         web_eles, web_eles_text = get_web_element_rect(page, fix_color=args.fix_box_color)
                     else:
                         accessibility_tree_path = os.path.join(task_dir, f"accessibility_tree{it}")
-                        # 兼容处理：如果 text_only 模式必须用，这里向旧版方法传递 page 对象可能需要修改 utils_webarena
+
                         ac_tree, obs_info = get_webarena_accessibility_tree(page, accessibility_tree_path)
                 except Exception as e:
                     logging.error("Browser error when capturing page: %s", e)
@@ -490,7 +458,7 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
             gpt_4v_res = openai_response.choices[0].message.content
             messages.append({"role": "assistant", "content": gpt_4v_res})
 
-            # 清理标注红框 (无需操作 Python 的 DOM 句柄，执行一行 JS 即可全清)
+
             if not args.text_only:
                 page.evaluate("document.querySelectorAll('.webvoyager-mark').forEach(e => e.remove())")
 
@@ -520,7 +488,7 @@ def run_single_task(task: Dict[str, Any], args_dict: Dict[str, Any]):
                                         obs_info[click_ele_number]["union_bound"][3] // 2}
                     exec_action_click(info, web_ele, page)
 
-                    # Check for PDF downloads (沿用轮询检测机制)
+                   
                     current_files = sorted(os.listdir(args.download_dir))
                     if current_files != download_files:
                         time.sleep(5)

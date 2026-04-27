@@ -9,13 +9,11 @@ import json
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-# 引入项目根目录
 project_root = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 sys.path.insert(0, project_root)
 
 from .timestamp import current_timestamp
 
-# --- Set-of-Marks (SoM) 脚本 ---
 JS_SOM_SCRIPT = """
 (function() {
     var oldLabels = document.querySelectorAll('.som-label');
@@ -47,12 +45,8 @@ JS_SOM_SCRIPT = """
 })();
 """
 
-
-# ==============================================================================
-#  核心进程与网络管理工具 (嗅探 + 彻底清理)
-# ==============================================================================
 def stop_process_tree(proc: subprocess.Popen, timeout: float = 5.0):
-    """跨平台彻底杀死进程组，防止僵尸进程占用端口"""
+
     if proc is None or proc.poll() is not None:
         return
     try:
@@ -63,7 +57,7 @@ def stop_process_tree(proc: subprocess.Popen, timeout: float = 5.0):
             except subprocess.TimeoutExpired:
                 proc.terminate()
         else:
-            # POSIX: 杀死整个进程组
+
             pgid = os.getpgid(proc.pid)
             os.killpg(pgid, signal.SIGTERM)
             try:
@@ -71,16 +65,13 @@ def stop_process_tree(proc: subprocess.Popen, timeout: float = 5.0):
             except subprocess.TimeoutExpired:
                 os.killpg(pgid, signal.SIGKILL)
     except Exception as e:
-        print(f"[WARN] 无法彻底清理进程树: {e}")
+        print(f"[WARN] Failed to completely clean up the process tree: {e}")
 
 
 def wait_for_url_in_log(log_path, timeout=30):
-    """动态读取日志文件，嗅探前端框架实际绑定的 URL"""
     print(f"Waiting for URL to appear in log ({log_path})...")
-    # 匹配 Vite/CRA 常见的 URL 输出格式
     url_pattern = re.compile(r"http://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|(?:\d{1,3}\.){3}\d{1,3}):\d+/?")
     deadline = time.time() + timeout
-
     while time.time() < deadline:
         if os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -88,21 +79,18 @@ def wait_for_url_in_log(log_path, timeout=30):
                 match = url_pattern.search(content)
                 if match:
                     url = match.group(0)
-                    # 统一替换为 localhost 以兼容 Playwright 访问
                     url = url.replace("0.0.0.0", "localhost").replace("127.0.0.1", "localhost")
                     print(f"Found service URL: {url}")
                     return url
         time.sleep(1)
-    raise TimeoutError(f"在 {timeout} 秒内未能在日志中嗅探到服务 URL。")
+    raise TimeoutError(f"Failed to sniff the service URL from the log within {timeout} seconds.")
 
 
 def start_background_service(start_cmd, cwd, log_file="service.log"):
-    """使用独立进程组启动后台服务，以便后续能够一锅端"""
     log_path = Path(log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = open(log_path, "w", encoding="utf-8")
 
-    # 关键：创建新的进程组
     kwargs = {'start_new_session': True} if platform.system() != "Windows" else {
         'creationflags': getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 512)}
 
@@ -130,12 +118,8 @@ def run_commands(cmds, cwd):
         results.append((cmd, output))
     return results
 
-
-# ==============================================================================
-#  BrowserEnv: 视觉代理交互环境
-# ==============================================================================
 class BrowserEnv:
-    # 🌟 修改 1: 增加指令、Builder模型和生成函数的接收参数，以及系统专线信箱
+
     def __init__(self, project_dir, log_dir, start_cmd="npm run dev", instruction="", builder_model=None,
                  llm_caller=None):
         self.project_dir = project_dir
@@ -151,15 +135,12 @@ class BrowserEnv:
         self.page = None
         self.process = None
         self.console_logs = []
-        self.system_notes = []  # 新增：专属的系统通知频道
+        self.system_notes = []
 
     def start(self, target_path=None):
-        # 1. 启动服务并动态嗅探 URL
         log_file = os.path.join(self.log_dir, "service.log")
         self.process, log_path_str = start_background_service(self.start_cmd, self.project_dir, log_file)
         self.base_url = wait_for_url_in_log(log_path_str, timeout=30)
-
-        # 2. 启动 Playwright 浏览器
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
             headless=True,
@@ -168,14 +149,13 @@ class BrowserEnv:
         self.context = self.browser.new_context(viewport={'width': 1200, 'height': 800})
         self.page = self.context.new_page()
 
-        # 🌟 修改 2: 全能版 handle_dialog，结合 Builder 推断和信箱记录
         def handle_dialog(dialog):
-            print(f"  > [Visual Copilot] 捕获系统弹窗 Type: {dialog.type}, Message: {dialog.message}")
+            print(f"  > [Visual Copilot] Captured system dialog Type: {dialog.type}, Message: {dialog.message}")
 
             if dialog.type == "prompt":
                 if self.llm_caller and self.builder_model:
                     try:
-                        print("    -> 正在呼叫 Builder 模型推断填表内容...")
+                        print("    -> Calling the Builder model to infer form-filling content...")
                         sys_msg = "You are an automated web testing sub-agent. Decide what text to input into a website's prompt dialog."
                         user_msg = (
                             f"Main Task Instruction: {self.instruction}\n\n"
@@ -195,22 +175,22 @@ class BrowserEnv:
                         )
 
                         dynamic_input = response.strip().strip("'\"")
-                        print(f"    -> Builder 模型决定填入: 【{dynamic_input}】")
+                        print(f"    -> Builder model decides to fill in: 【{dynamic_input}】")
 
                         self.system_notes.append(
                             f"Auto-filled input prompt ('{dialog.message}') with text: '{dynamic_input}'")
                         dialog.accept(dynamic_input)
                     except Exception as e:
-                        print(f"    -> 动态推理失败: {e}。使用安全回退方案。")
+                        print(f"    -> Dynamic inference failed: {e}. Using fallback solution.")
                         self.system_notes.append(
                             f"Auto-filled input prompt ('{dialog.message}') with fallback text: 'test_input'")
                         dialog.accept("test_input")
                 else:
-                    print("    -> 警告: 未设置 Builder 模型，将提交空内容。")
+                    print("    -> Warning: Builder model not set, submitting empty content.")
                     self.system_notes.append(f"Intercepted prompt ('{dialog.message}'), submitted empty string.")
                     dialog.accept()
             else:
-                print("    -> 捕获信息通知弹窗，系统自动点击确定。")
+                print("    -> Captured informational dialog, the system automatically clicks OK.")
                 self.system_notes.append(
                     f"A browser popup appeared saying: '{dialog.message}'. The system automatically clicked OK.")
                 dialog.accept()
@@ -221,7 +201,6 @@ class BrowserEnv:
                                                                                                                 "warning"] else None)
         self.page.on("pageerror", lambda exc: self.console_logs.append({"type": "exception", "text": str(exc)}))
 
-        # 3. 访问动态获取到的地址
         url = f"{self.base_url.rstrip('/')}/{target_path.lstrip('/')}" if target_path else self.base_url
         print(f"  > [BrowserEnv] Probing: {url}")
 
@@ -234,7 +213,6 @@ class BrowserEnv:
     def get_console_logs(self):
         return [l for l in self.console_logs if l['type'] in ['error', 'exception']]
 
-    # 🌟 新增：提取并清空系统通知频道的方法
     def get_and_clear_system_notes(self):
         notes = self.system_notes.copy()
         self.system_notes.clear()
@@ -260,7 +238,7 @@ class BrowserEnv:
         return img_path
 
     def execute_action(self, action_str):
-        # 动作执行逻辑保持不变
+
         if not self.page: return "Page not loaded"
         viewport_size = self.page.viewport_size
         width, height = viewport_size['width'], viewport_size['height']
@@ -319,10 +297,6 @@ class BrowserEnv:
         if self.playwright: self.playwright.stop()
         if self.process: stop_process_tree(self.process)
 
-
-# ==============================================================================
-#  核心改进：无硬编码端口反馈收集 + 注入后台日志
-# ==============================================================================
 def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="npm run dev", step_idx=None):
     feedback = {"install_error": [], "start_results": "", "start_error": False, "screenshot_path": ""}
 
@@ -331,7 +305,6 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
         if "npm ERR!" in out or "EBADENGINE" in out or "Unsupported engine" in out:
             feedback["install_error"].append(f"Issue in '{cmd}':\n{out[-600:]}")
 
-    # 环境初始化：不再传递 app_port (这里的额外参数默认即可，因为它不是视觉推断阶段)
     env = BrowserEnv(project_dir, log_dir, start_cmd)
 
     try:
@@ -340,7 +313,6 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
         if env.is_page_empty() or logs:
             feedback["start_error"] = True
 
-            # 🌟 核心补丁：主动读取 Vite 后台编译日志（最后30行）
             log_tail = ""
             log_path = os.path.join(log_dir, "service.log")
             if os.path.exists(log_path):
@@ -350,7 +322,6 @@ def execute_for_feedback(project_dir, log_dir, cmds=["npm install"], start_cmd="
                 except:
                     log_tail = "Failed to read service.log"
 
-            # 将后台日志拼接到 start_results 中，送给大模型进行排错
             feedback["start_results"] = (
                 f"Runtime Issue! Empty Page: {env.is_page_empty()}, Console Logs: {json.dumps(logs)}\n\n"
                 f"--- BACKEND SERVICE LOG (Crucial for fixing compilation errors) ---\n"
@@ -390,7 +361,6 @@ def execute_for_webvoyager_feedback(instruction, project_dir, log_dir, vlm_model
     from .vlm_generation import vlm_generation, encode_image
     run_commands(cmds, cwd=project_dir)
 
-    # 这里的 env 也是只供外部调用，保持默认即可
     env = BrowserEnv(project_dir, log_dir, start_cmd)
     trace, status, grade, suggestions = [], "unknown", 1.0, "Simulation failed."
 

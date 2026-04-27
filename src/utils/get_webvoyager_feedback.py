@@ -146,18 +146,16 @@ def get_webvoyager_feedback(idx, output_dir, instruction, url, vlm_model, model,
 
 
 if __name__ == "__main__":
-    # idx = "000001_step3"
-    # output_dir = "/mnt/cache/agent/Zimu/WebGen-Agent/service_logs/debug_webvoyager/feedback/000001"
+
     instruction = "Verify white background and navy buttons. Search and summarize stock information, generate customized stock reports by inputting stock codes or names and selecting report formats and content. Check that reports include basic stock information, market trends, and financial data."
-    # url = "http://localhost:3298/"
-    # vlm_model = "/mnt/cache/sharemath/models/Qwen/Qwen2.5-VL-32B-Instruct"
+
     model = "deepseek-v3-250324"
     # result = get_webvoyager_feedback(idx, output_dir, instruction, url, vlm_model, model)
     # print(result)
 
     import json
 
-    in_file = "/mnt/cache/agent/Zimu/WebGen-Agent/service_logs/debug_agentv1_2/000002/task2025-05-21T14-36-33-065/interact_messages.json"
+    in_file = "your_path"
     with open(in_file, "r", encoding="utf-8") as f:
         data = json.load(f)
     messages = data

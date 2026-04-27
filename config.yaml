@@ -1,12 +1,12 @@
-# 数据路径配置
-# data_path: "/home/hhr/home/InteractWeb-Bench/data/test_mini.jsonl"
+# Data path configuration
+# data_path: "/your_path/InteractWeb-Bench/data/test_mini.jsonl"
 #docker:
-# data_path: "/app/data/high_scores_simulation_labeled.jsonl"
-data_path: "/app/experiment_results/Qwen3.5-9B/retest_tasks.jsonl"
-# output_dir: "/home/hhr/home/store/experiment_results"
+# data_path: "/app/data/test_mini.jsonl"
+data_path: "/app/data/test_mini.jsonl"
+# output_dir: "/your_path/store/experiment_results"
 #docker:
 output_dir: "/app/experiment_results"
-# 模型选择配置
+# Model selection configuration
 models:
 
   builder_model: "Qwen3.5-9B"

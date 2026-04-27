@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # =================================================================
-# 项目名称：InteractWeb-Bench 实验启动脚本
-# 脚本功能：启动指定版本的 Docker 容器进行模型测试
-# 镜像版本：interactweb-bench:v1.0
+# Project Name: InteractWeb-Bench Experiment Launch Script
+# Script Purpose: Launch a specified Docker container for model evaluation
+# Image Version: interactweb-bench:v1.0
 # =================================================================
 
-# 定义宿主机项目根路径，便于后续路径映射维护
-PROJECT_PATH="/data/shared/users/wangqiyao/InteractWeb-Bench"
+# Define the host machine's project root path for easier path mapping and maintenancePROJECT_PATH="/data/shared/users/wangqiyao/InteractWeb-Bench"
 
 docker run -it --rm \
   --name interactweb_test-qwen-retest \

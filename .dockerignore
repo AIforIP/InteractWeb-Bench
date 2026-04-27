@@ -1,0 +1,15 @@
+# Ignore Git version control files themselves
+.git
+.gitignore
+
+# Ignore local configuration (mounted at runtime)
+.env
+config.yaml
+
+# Ignore large files and local runtime results (mounted at runtime)
+data/
+run_simulation.log
+
+# Ignore cache files
+__pycache__/
+*.pyc
