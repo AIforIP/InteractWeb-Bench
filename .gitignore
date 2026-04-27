@@ -14,7 +14,7 @@ server.py
 experiment/*.png
 experiment/*.csv
 
-data/all.jsonl
+
 data/half*.jsonl
 
 experiment_results/
@@ -32,6 +32,6 @@ src/standalone_visual_logs/
 !data/
 !scripts/
 !Dockerfile
-
+!data/all.jsonl
 !data/test_mini.jsonl
 !data/part*.jsonl
