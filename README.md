@@ -58,10 +58,13 @@ Follow the steps below to quickly set up and run **InteractWeb-Bench**.
 conda create -n InteractWeb-Bench python=3.10 -y
 conda activate InteractWeb-Bench
 pip install -r requirements.txt
+```
+```bash
 playwright install chromium
 ```
 Install Node.js:
 ```bash
+cd scripts
 bash install_node.sh
 ```
 ### 2. Configure Environment Variables
