@@ -37,7 +37,7 @@ This repo contains the evaluation code for the paper "[InteractWeb-Bench: Can Mu
 
 - [x] Code
 - [x] Dataset
-- [ ] Software Demostration
+- [ ] Software Demostration (Comming soon...)
 
 ## 📝 Introduction
 InteractWeb-Bench is a multimodal interactive benchmark for evaluating website generation agents under real-world, non-expert user conditions. 
